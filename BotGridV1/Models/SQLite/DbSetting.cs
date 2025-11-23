@@ -38,6 +38,9 @@ namespace BotGridV1.Models.SQLite
 
         [Column("PERCEN_SELL", TypeName = "decimal(18,2)")]
         public decimal PERCEN_SELL { get; set; }
+
+        [Column("BuyAmountUSD", TypeName = "decimal(18,2)")]
+        public decimal? BuyAmountUSD { get; set; } // จำนวนเงินซื้อขาย (USD)
     }
     public class req_GetById
     {

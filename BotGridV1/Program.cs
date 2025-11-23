@@ -1,4 +1,5 @@
 using BotGridV1.Models.SQLite;
+using BotGridV1.Services;
 using Microsoft.EntityFrameworkCore;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -15,6 +16,13 @@ var connectionString = builder.Configuration.GetConnectionString("DefaultConnect
 
 builder.Services.AddDbContext<ApplicationDbContext>(options =>
     options.UseSqlite(connectionString));
+
+// Register HttpClient for DiscordService
+builder.Services.AddHttpClient<DiscordService>();
+
+// Register BotWorkerService as a hosted service
+builder.Services.AddSingleton<BotWorkerService>();
+builder.Services.AddHostedService(provider => provider.GetRequiredService<BotWorkerService>());
 
 var app = builder.Build();
 

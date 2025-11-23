@@ -10,6 +10,7 @@ namespace BotGridV1.Models.SQLite
         }
 
         public DbSet<DbSetting> DbSettings { get; set; }
+        public DbSet<DbOrder> DbOrders { get; set; }
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
@@ -20,6 +21,14 @@ namespace BotGridV1.Models.SQLite
                 entity.ToTable("db_setting");
                 entity.HasKey(e => e.Id);
                 entity.Property(e => e.Id).ValueGeneratedOnAdd();
+            });
+
+            modelBuilder.Entity<DbOrder>(entity =>
+            {
+                entity.ToTable("db_Order");
+                entity.HasKey(e => e.Id);
+                entity.Property(e => e.Id).ValueGeneratedOnAdd();
+                entity.HasIndex(e => new { e.Status, e.PriceWaitSell });
             });
         }
     }

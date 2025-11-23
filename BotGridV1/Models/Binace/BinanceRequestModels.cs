@@ -54,5 +54,80 @@ namespace BotGridV1.Models.Binace
         public long? OrderId { get; set; }
         public string? Symbol { get; set; }
     }
+
+    public class req_GetPriceRealtime
+    {
+        public string? Symbol { get; set; } // Default: BTCUSDT
+    }
+
+    public class req_StartBot
+    {
+        public int? ConfigId { get; set; }
+    }
+
+    // Discord Logging Request Models
+    public class req_DiscordLog
+    {
+        public string? Webhook1 { get; set; }
+        public string? Webhook2 { get; set; }
+        public string? Message { get; set; }
+        public string? Details { get; set; }
+    }
+
+    public class req_DiscordBuyLog
+    {
+        public string? Webhook1 { get; set; }
+        public string? Webhook2 { get; set; }
+        public string? Symbol { get; set; }
+        public decimal Price { get; set; }
+        public decimal Quantity { get; set; }
+        public decimal BuyAmount { get; set; }
+        public string? OrderId { get; set; }
+    }
+
+    public class req_DiscordSellLog
+    {
+        public string? Webhook1 { get; set; }
+        public string? Webhook2 { get; set; }
+        public string? Symbol { get; set; }
+        public decimal Price { get; set; }
+        public decimal Quantity { get; set; }
+        public decimal? ProfitLoss { get; set; }
+        public string? OrderId { get; set; }
+    }
+
+    public class req_DiscordStartLog
+    {
+        public string? Webhook1 { get; set; }
+        public string? Webhook2 { get; set; }
+        public string? Symbol { get; set; }
+        public int ConfigId { get; set; }
+    }
+
+    public class req_DiscordStopLog
+    {
+        public string? Webhook1 { get; set; }
+        public string? Webhook2 { get; set; }
+        public string? Symbol { get; set; }
+    }
+
+    public class req_DiscordBuyRetryLog
+    {
+        public string? Webhook1 { get; set; }
+        public string? Webhook2 { get; set; }
+        public string? Symbol { get; set; }
+        public decimal Price { get; set; }
+        public int RetryCount { get; set; }
+        public string? Reason { get; set; }
+    }
+
+    public class req_DiscordBuyNotSuccessLog
+    {
+        public string? Webhook1 { get; set; }
+        public string? Webhook2 { get; set; }
+        public string? Symbol { get; set; }
+        public string? Error { get; set; }
+        public int RetryCount { get; set; }
+    }
 }
 

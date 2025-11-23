@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "dgSpecHash": "gRQSjEsDgp2l/1d4ZNd8WMEE2+C1D3hvi7DpFNZLO++OL8u6iJRCWDKcekPtrr6NyR87mXthcgXRf3t7Ydlebg==",
+  "dgSpecHash": "pdRBa/fu1gE=",
   "success": true,
   "projectFilePath": "H:\\Developer\\Python\\CCharp\\BotGridV1\\BotGridV1\\BotGridV1.csproj",
   "expectedPackageFiles": [
@@ -41,7 +41,11 @@
     "C:\\Users\\CayoshiMs\\.nuget\\packages\\system.io.pipelines\\9.0.10\\system.io.pipelines.9.0.10.nupkg.sha512",
     "C:\\Users\\CayoshiMs\\.nuget\\packages\\system.memory\\4.5.3\\system.memory.4.5.3.nupkg.sha512",
     "C:\\Users\\CayoshiMs\\.nuget\\packages\\system.text.encodings.web\\9.0.10\\system.text.encodings.web.9.0.10.nupkg.sha512",
-    "C:\\Users\\CayoshiMs\\.nuget\\packages\\system.text.json\\9.0.10\\system.text.json.9.0.10.nupkg.sha512"
+    "C:\\Users\\CayoshiMs\\.nuget\\packages\\system.text.json\\9.0.10\\system.text.json.9.0.10.nupkg.sha512",
+    "C:\\Users\\CayoshiMs\\.nuget\\packages\\microsoft.netcore.app.ref\\8.0.22\\microsoft.netcore.app.ref.8.0.22.nupkg.sha512",
+    "C:\\Users\\CayoshiMs\\.nuget\\packages\\microsoft.windowsdesktop.app.ref\\8.0.22\\microsoft.windowsdesktop.app.ref.8.0.22.nupkg.sha512",
+    "C:\\Users\\CayoshiMs\\.nuget\\packages\\microsoft.aspnetcore.app.ref\\8.0.22\\microsoft.aspnetcore.app.ref.8.0.22.nupkg.sha512",
+    "C:\\Users\\CayoshiMs\\.nuget\\packages\\microsoft.netcore.app.host.win-x64\\8.0.22\\microsoft.netcore.app.host.win-x64.8.0.22.nupkg.sha512"
   ],
   "logs": []
 }
