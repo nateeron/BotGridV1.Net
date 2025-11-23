@@ -1,1 +1,11 @@
-{"Version":1,"Hash":"Ql1Ri8q8rFA80vawPLf07++aV8kmaZWnkKj3Jzd0Nmc=","Source":"BotGridV1","BasePath":"_content/BotGridV1","Mode":"Default","ManifestType":"Build","ReferencedProjectsConfiguration":[],"DiscoveryPatterns":[],"Assets":[],"Endpoints":[]}
+{
+  "Version": 1,
+  "Hash": "GntOy7xrVB8tiO7w9NGYL4ysade5V0WaVRh8flYWt8M=",
+  "Source": "BotGridV1",
+  "BasePath": "_content/BotGridV1",
+  "Mode": "Default",
+  "ManifestType": "Build",
+  "ReferencedProjectsConfiguration": [],
+  "DiscoveryPatterns": [],
+  "Assets": []
+}

@@ -152,6 +152,7 @@ namespace BotGridV1.Controllers
                 existingSetting.SYMBOL = setting.SYMBOL;
                 existingSetting.PERCEN_BUY = setting.PERCEN_BUY;
                 existingSetting.PERCEN_SELL = setting.PERCEN_SELL;
+                existingSetting.BuyAmountUSD = setting.BuyAmountUSD;
 
                 await _context.SaveChangesAsync();
 

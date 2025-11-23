@@ -206,29 +206,44 @@ namespace BotGridV1.Services
                 bool shouldCheckBuy = false;
                 decimal? buyThreshold = null;
 
-                // Check if last action is a Buy order
-                // ตรวจสอบว่า action ล่าสุดเป็น Buy order หรือไม่
-                if (lastActionOrder != null && !string.IsNullOrEmpty(lastActionOrder.OrderBuyID) && lastActionOrder.PriceBuy.HasValue)
+                // Check if last action is a completed order (Buy or Sold, not WAITING_SELL)
+                // ตรวจสอบว่า action ล่าสุดเป็น order ที่ถูก Action แล้ว (Buy หรือขายแล้ว ไม่ใช่รอขาย)
+                if (lastActionOrder != null && lastActionOrder.Status != "WAITING_SELL")
                 {
-                    // Last action is Buy - use PriceBuy for threshold calculation
-                    // Action ล่าสุดเป็น Buy - ใช้ PriceBuy ในการคำนวณ threshold
-                    buyThreshold = lastActionOrder.PriceBuy.Value * (1 - config.PERCEN_BUY / 100);
-                    if (currentPrice <= buyThreshold)
+                    // Last action is completed (SOLD or other completed status)
+                    // Action ล่าสุดเสร็จสมบูรณ์แล้ว (SOLD หรือ status อื่นที่เสร็จแล้ว)
+                    if (lastActionOrder.Status == "SOLD" && lastActionOrder.PriceSellActual.HasValue)
                     {
-                        shouldCheckBuy = true;
+                        // Last action is Sold - use PriceSellActual for threshold calculation
+                        // Action ล่าสุดเป็นขายแล้ว - ใช้ PriceSellActual ในการคำนวณ threshold
+                        buyThreshold = lastActionOrder.PriceSellActual.Value * (1 - config.PERCEN_BUY / 100);
+                        if (currentPrice <= buyThreshold)
+                        {
+                            shouldCheckBuy = true;
+                        }
+                    }
+                    else if (!string.IsNullOrEmpty(lastActionOrder.OrderBuyID) && lastActionOrder.PriceBuy.HasValue)
+                    {
+                        // Last action is Buy (but not SOLD yet) - use PriceBuy for threshold calculation
+                        // Action ล่าสุดเป็น Buy (แต่ยังไม่ขาย) - ใช้ PriceBuy ในการคำนวณ threshold
+                        buyThreshold = lastActionOrder.PriceBuy.Value * (1 - config.PERCEN_BUY / 100);
+                        if (currentPrice <= buyThreshold)
+                        {
+                            shouldCheckBuy = true;
+                        }
                     }
                 }
-                else if (openSellOrders.Any())
-                {
-                    // Last action is not Buy or no last action - use lowest PriceWaitSell from open sell orders
-                    // Action ล่าสุดไม่ใช่ Buy หรือไม่มี action - ใช้ PriceWaitSell ต่ำสุดจาก order ขายที่เปิดอยู่
-                    var lowestSellPrice = openSellOrders.First().PriceWaitSell!.Value;
-                    buyThreshold = lowestSellPrice * (1 - config.PERCEN_BUY / 100);
-                    if (currentPrice <= buyThreshold)
-                    {
-                        shouldCheckBuy = true;
-                    }
-                }
+                //else if (openSellOrders.Any())
+                //{
+                //    // Last action is not Buy or no last action - use lowest PriceWaitSell from open sell orders
+                //    // Action ล่าสุดไม่ใช่ Buy หรือไม่มี action - ใช้ PriceWaitSell ต่ำสุดจาก order ขายที่เปิดอยู่
+                //    var lowestSellPrice = openSellOrders.First().PriceWaitSell!.Value;
+                //    buyThreshold = lowestSellPrice * (1 - config.PERCEN_BUY / 100);
+                //    if (currentPrice <= buyThreshold)
+                //    {
+                //        shouldCheckBuy = true;
+                //    }
+                //}
                 else
                 {
                     // No orders at all - check if we should buy
@@ -293,11 +308,22 @@ namespace BotGridV1.Services
                 // ตรวจสอบเงื่อนไขการซื้ออีกครั้งโดยใช้ last action order หรือ open sell orders
                 decimal? threshold = null;
 
-                if (lastActionOrder != null && !string.IsNullOrEmpty(lastActionOrder.OrderBuyID) && lastActionOrder.PriceBuy.HasValue)
+                if (lastActionOrder != null && lastActionOrder.Status != "WAITING_SELL")
                 {
-                    // Last action is Buy - use PriceBuy
-                    // Action ล่าสุดเป็น Buy - ใช้ PriceBuy
-                    threshold = lastActionOrder.PriceBuy.Value * (1 - config.PERCEN_BUY / 100);
+                    // Last action is completed (not WAITING_SELL)
+                    // Action ล่าสุดเสร็จสมบูรณ์แล้ว (ไม่ใช่รอขาย)
+                    if (lastActionOrder.Status == "SOLD" && lastActionOrder.PriceSellActual.HasValue)
+                    {
+                        // Last action is Sold - use PriceSellActual
+                        // Action ล่าสุดเป็นขายแล้ว - ใช้ PriceSellActual
+                        threshold = lastActionOrder.PriceSellActual.Value * (1 - config.PERCEN_BUY / 100);
+                    }
+                    else if (!string.IsNullOrEmpty(lastActionOrder.OrderBuyID) && lastActionOrder.PriceBuy.HasValue)
+                    {
+                        // Last action is Buy - use PriceBuy
+                        // Action ล่าสุดเป็น Buy - ใช้ PriceBuy
+                        threshold = lastActionOrder.PriceBuy.Value * (1 - config.PERCEN_BUY / 100);
+                    }
                 }
                 else if (openSellOrders != null && openSellOrders.Any())
                 {
