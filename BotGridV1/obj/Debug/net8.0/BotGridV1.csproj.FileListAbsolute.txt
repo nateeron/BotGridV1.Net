@@ -62,3 +62,4 @@ H:\Developer\Python\CCharp\BotGridV1\BotGridV1\obj\Debug\net8.0\refint\BotGridV1
 H:\Developer\Python\CCharp\BotGridV1\BotGridV1\obj\Debug\net8.0\BotGridV1.pdb
 H:\Developer\Python\CCharp\BotGridV1\BotGridV1\obj\Debug\net8.0\BotGridV1.genruntimeconfig.cache
 H:\Developer\Python\CCharp\BotGridV1\BotGridV1\obj\Debug\net8.0\ref\BotGridV1.dll
+H:\Developer\Python\CCharp\BotGridV1\BotGridV1\obj\Debug\net8.0\BotGridV1.sourcelink.json
