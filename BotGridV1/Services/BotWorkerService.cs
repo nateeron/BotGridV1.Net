@@ -297,9 +297,8 @@ namespace BotGridV1.Services
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, $"Error processing price update: {currentPrice}");
-
-                // Log Error to Discord
+                // Alert to Discord only (no logging to save RAM/CPU)
+                // แจ้งเตือนไปยัง Discord เท่านั้น (ไม่ log เพื่อประหยัด RAM/CPU)
                 if (_discordService != null && config != null)
                 {
                     await _discordService.LogErrorAsync(
