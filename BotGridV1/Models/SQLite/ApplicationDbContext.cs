@@ -1,0 +1,27 @@
+using Microsoft.EntityFrameworkCore;
+
+namespace BotGridV1.Models.SQLite
+{
+    public class ApplicationDbContext : DbContext
+    {
+        public ApplicationDbContext(DbContextOptions<ApplicationDbContext> options)
+            : base(options)
+        {
+        }
+
+        public DbSet<DbSetting> DbSettings { get; set; }
+
+        protected override void OnModelCreating(ModelBuilder modelBuilder)
+        {
+            base.OnModelCreating(modelBuilder);
+
+            modelBuilder.Entity<DbSetting>(entity =>
+            {
+                entity.ToTable("db_setting");
+                entity.HasKey(e => e.Id);
+                entity.Property(e => e.Id).ValueGeneratedOnAdd();
+            });
+        }
+    }
+}
+
