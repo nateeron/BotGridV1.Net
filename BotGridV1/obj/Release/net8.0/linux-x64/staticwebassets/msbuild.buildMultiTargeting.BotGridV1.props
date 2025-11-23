@@ -1,0 +1,3 @@
+﻿<Project>
+  <Import Project="..\build\BotGridV1.props" />
+</Project>

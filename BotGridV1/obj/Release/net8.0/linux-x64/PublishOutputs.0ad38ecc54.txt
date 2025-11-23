@@ -1,0 +1,11 @@
+H:\Developer\Python\CCharp\BotGridV1\BotGridV1\bin\Release\net8.0\linux-x64\publish\BotGridV1
+H:\Developer\Python\CCharp\BotGridV1\BotGridV1\bin\Release\net8.0\linux-x64\publish\appsettings.Development.json
+H:\Developer\Python\CCharp\BotGridV1\BotGridV1\bin\Release\net8.0\linux-x64\publish\appsettings.json
+H:\Developer\Python\CCharp\BotGridV1\BotGridV1\bin\Release\net8.0\linux-x64\publish\BotGridV1.dll
+H:\Developer\Python\CCharp\BotGridV1\BotGridV1\bin\Release\net8.0\linux-x64\publish\BotGridV1.deps.json
+H:\Developer\Python\CCharp\BotGridV1\BotGridV1\bin\Release\net8.0\linux-x64\publish\BotGridV1.runtimeconfig.json
+H:\Developer\Python\CCharp\BotGridV1\BotGridV1\bin\Release\net8.0\linux-x64\publish\BotGridV1.pdb
+H:\Developer\Python\CCharp\BotGridV1\BotGridV1\bin\Release\net8.0\linux-x64\publish\Microsoft.OpenApi.dll
+H:\Developer\Python\CCharp\BotGridV1\BotGridV1\bin\Release\net8.0\linux-x64\publish\Swashbuckle.AspNetCore.Swagger.dll
+H:\Developer\Python\CCharp\BotGridV1\BotGridV1\bin\Release\net8.0\linux-x64\publish\Swashbuckle.AspNetCore.SwaggerGen.dll
+H:\Developer\Python\CCharp\BotGridV1\BotGridV1\bin\Release\net8.0\linux-x64\publish\Swashbuckle.AspNetCore.SwaggerUI.dll

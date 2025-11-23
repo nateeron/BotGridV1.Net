@@ -1,0 +1,6 @@
+@BotGridV1_HostAddress = http://localhost:5081
+
+GET {{BotGridV1_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###
