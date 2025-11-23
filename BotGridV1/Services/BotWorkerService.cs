@@ -394,12 +394,18 @@ namespace BotGridV1.Services
                     _logger.LogDebug($"Buy cancelled: Last action order is WAITING_SELL (ID: {freshLastActionOrder.Id})");
                     return;
                 }
+                decimal buyThresholdRunUp_Buy = 0;
+                // 1) คำนวณ RunUp เฉพาะเมื่อ lastActionOrder ไม่ใช่ null และ PriceSellActual != null
+                if (lastActionOrder != null && lastActionOrder.PriceSellActual != null)
+                {
+                    decimal lastPrice = lastActionOrder.PriceSellActual.Value;
+                    buyThresholdRunUp_Buy = lastPrice + (lastPrice * config.PERCEN_BUY / 100);
+                }
 
-                decimal buyThresholdRunUp_Buy = lastActionOrder.PriceSellActual.Value + (lastActionOrder.PriceSellActual.Value * config.PERCEN_BUY / 100);
                 // Only check threshold if it was set (not null)
                 // ถ้า threshold = null (ไม่มี order) ให้ซื้อทันที
                 // ตรวจสอบ threshold เฉพาะเมื่อมีการตั้งค่า (ไม่ใช่ null)
-                if (threshold.HasValue && currentPrice > threshold.Value && !(currentPrice >= buyThresholdRunUp_Buy && openSellOrders.Count() == 0))
+                if (threshold.HasValue && currentPrice > threshold.Value && !(buyThresholdRunUp_Buy > 0 && currentPrice >= buyThresholdRunUp_Buy && openSellOrders.Count() == 0))
                 {
                     _logger.LogDebug($"Buy cancelled: Price {currentPrice} is above threshold {threshold.Value}");
                     return; // Price hasn't dropped enough ราคายังไม่ลดลงเพียงพอ
