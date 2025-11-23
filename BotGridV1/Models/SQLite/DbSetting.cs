@@ -45,10 +45,23 @@ namespace BotGridV1.Models.SQLite
     public class req_GetById
     {
         public int id { get; set; }
-
     }
 
+    public class req_GetOrdersByStatus
+    {
+        public string? Status { get; set; }
+        public int? SettingId { get; set; }
+    }
 
+    public class req_DeleteOrders
+    {
+        public List<int> Ids { get; set; } = new List<int>();
+    }
 
+    public class req_DeleteOrdersByStatus
+    {
+        public string Status { get; set; } = string.Empty;
+        public int? SettingId { get; set; }
+    }
 }
 

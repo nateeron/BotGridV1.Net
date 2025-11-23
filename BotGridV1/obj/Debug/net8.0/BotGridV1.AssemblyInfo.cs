@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("BotGridV1")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+86165525730bf36ba6043796b101f76e23b8fe3d")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+e85c32430c475dc01d4ed5960842cf7260f40a01")]
 [assembly: System.Reflection.AssemblyProductAttribute("BotGridV1")]
 [assembly: System.Reflection.AssemblyTitleAttribute("BotGridV1")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]

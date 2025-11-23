@@ -54,7 +54,7 @@ namespace BotGridV1.Services
                     _logger.LogError("Configuration not found or API credentials missing");
                     if (_discordService != null && config != null)
                     {
-                        await _discordService.LogErrorAsync(config.DisCord_Hook1, config.DisCord_Hook2, 
+                        await _discordService.LogErrorAsync(config.DisCord_Hook1, config.DisCord_Hook2,
                             "Configuration not found or API credentials missing", "Bot start failed");
                     }
                     return false;
@@ -65,7 +65,7 @@ namespace BotGridV1.Services
                     _logger.LogError("Symbol not configured");
                     if (_discordService != null)
                     {
-                        await _discordService.LogErrorAsync(config.DisCord_Hook1, config.DisCord_Hook2, 
+                        await _discordService.LogErrorAsync(config.DisCord_Hook1, config.DisCord_Hook2,
                             "Symbol not configured", "Bot start failed");
                     }
                     return false;
@@ -96,7 +96,7 @@ namespace BotGridV1.Services
                     _logger.LogError($"Failed to subscribe to {symbol}: {subscription.Error?.Message}");
                     if (_discordService != null)
                     {
-                        await _discordService.LogErrorAsync(config.DisCord_Hook1, config.DisCord_Hook2, 
+                        await _discordService.LogErrorAsync(config.DisCord_Hook1, config.DisCord_Hook2,
                             $"Failed to subscribe to {symbol}", subscription.Error?.Message ?? "Unknown error");
                     }
                     return false;
@@ -104,13 +104,13 @@ namespace BotGridV1.Services
 
                 _isRunning = true;
                 _logger.LogInformation($"Bot worker started for symbol: {symbol}");
-                
+
                 // Log to Discord
                 if (_discordService != null)
                 {
                     await _discordService.LogStartAsync(config.DisCord_Hook1, config.DisCord_Hook2, symbol, config.Id);
                 }
-                
+
                 return true;
             }
             catch (Exception ex)
@@ -136,13 +136,13 @@ namespace BotGridV1.Services
                 _isRunning = false;
                 _orderCache.Clear();
                 _logger.LogInformation("Bot worker stopped");
-                
+
                 // Log to Discord
                 if (_discordService != null && _currentConfig != null)
                 {
                     await _discordService.LogStopAsync(_currentConfig.DisCord_Hook1, _currentConfig.DisCord_Hook2, symbol);
                 }
-                
+
                 _currentConfig = null;
             }
             catch (Exception ex)
@@ -150,7 +150,7 @@ namespace BotGridV1.Services
                 _logger.LogError(ex, "Error stopping bot worker");
                 if (_discordService != null && _currentConfig != null)
                 {
-                    await _discordService.LogErrorAsync(_currentConfig.DisCord_Hook1, _currentConfig.DisCord_Hook2, 
+                    await _discordService.LogErrorAsync(_currentConfig.DisCord_Hook1, _currentConfig.DisCord_Hook2,
                         "Error stopping bot worker", ex.Message);
                 }
             }
@@ -160,14 +160,14 @@ namespace BotGridV1.Services
         {
             try
             {
-                lock (_lockObject)
+                // Quick check to prevent processing if we just bought (outside lock for performance)
+                // ตรวจสอบเบื้องต้นเพื่อป้องกันการประมวลผลถ้าเพิ่งซื้อไป (นอก lock เพื่อประสิทธิภาพ)
+                // But allow processing if _lastBuyTime is still at initial value (DateTime.MinValue)
+                // แต่ให้ประมวลผลได้ถ้า _lastBuyTime ยังเป็นค่าเริ่มต้น (DateTime.MinValue)
+                var timeSinceLastBuy = DateTime.UtcNow - _lastBuyTime;
+                if (_lastBuyTime != DateTime.MinValue && timeSinceLastBuy < _minBuyInterval)
                 {
-                    // Check if we need to wait (prevent duplicate buys)
-                    // ตรวจสอบว่าเราต้องรอหรือไม่ (ป้องกันการซื้อซ้ำ)
-                    if (DateTime.UtcNow - _lastBuyTime < _minBuyInterval)
-                    {
-                        return;
-                    }
+                    return; // Too soon after last buy, skip processing
                 }
 
                 using var scope = _serviceProvider.CreateScope();
@@ -175,6 +175,15 @@ namespace BotGridV1.Services
 
                 // Reload cache if needed (when sold orders are removed)
                 // โหลดแคชใหม่หากจำเป็น (เมื่อคำสั่งขายถูกลบออก)
+                lock (_lockObject)
+                {
+                    if (_orderCache.Count(o => o.Status == "WAITING_SELL") <= 2)
+                    {
+                        // Will reload after lock
+                    }
+                }
+
+                // Reload outside lock to avoid blocking
                 if (_orderCache.Count(o => o.Status == "WAITING_SELL") <= 2)
                 {
                     await ReloadOrderCacheAsync(context, config.Id);
@@ -182,11 +191,15 @@ namespace BotGridV1.Services
 
                 // Get orders waiting to sell (top 20, sorted by sell price ascending)
                 // รับคำสั่งซื้อรอขาย (20 อันดับแรก เรียงตามราคาขายจากน้อยไปมาก)
-                var waitingSellOrders = _orderCache
-                    .Where(o => o.Status == "WAITING_SELL" && o.Setting_ID == config.Id)
-                    .OrderBy(o => o.PriceWaitSell)
-                    .Take(20)
-                    .ToList();
+                List<OrderCache> waitingSellOrders;
+                lock (_lockObject)
+                {
+                    waitingSellOrders = _orderCache
+                        .Where(o => o.Status == "WAITING_SELL" && o.Setting_ID == config.Id)
+                        .OrderBy(o => o.PriceWaitSell)
+                        .Take(20)
+                        .ToList();
+                }
 
                 // Get last action order (top 1 order by ID desc)
                 // รับ order action ล่าสุด (top 1 order by ID desc)
@@ -202,7 +215,7 @@ namespace BotGridV1.Services
                 var openSellOrders = await context.DbOrders
                     .Where(o => o.Setting_ID == config.Id && o.Status == "WAITING_SELL" && o.PriceWaitSell.HasValue)
                     .ToListAsync();
-                
+
                 openSellOrders = openSellOrders
                     .OrderBy(o => o.PriceWaitSell)
                     .Take(20)
@@ -218,32 +231,35 @@ namespace BotGridV1.Services
                     // No orders at all - should buy immediately
                     // ไม่มี order เลย - ควรซื้อทันที
                     shouldCheckBuy = true;
+                    _logger.LogInformation($"No orders found in database for Config ID {config.Id}. Will attempt to buy at current price: {currentPrice}");
                 }
-                else if (lastActionOrder.Status != "WAITING_SELL")
+                // Last action is completed (SOLD or other completed status)
+                // Action ล่าสุดเสร็จสมบูรณ์แล้ว (SOLD หรือ status อื่นที่เสร็จแล้ว)
+                else if (lastActionOrder.Status == "SOLD" && lastActionOrder.PriceSellActual.HasValue)
                 {
-                    // Last action is completed (SOLD or other completed status)
-                    // Action ล่าสุดเสร็จสมบูรณ์แล้ว (SOLD หรือ status อื่นที่เสร็จแล้ว)
-                    if (lastActionOrder.Status == "SOLD" && lastActionOrder.PriceSellActual.HasValue)
+                    // Last action is Sold - use PriceSellActual for threshold calculation
+                    // Action ล่าสุดเป็นขายแล้ว - ใช้ PriceSellActual ในการคำนวณ threshold
+                    // A - (A * 2 / 100)
+                    buyThreshold = lastActionOrder.PriceSellActual.Value - (lastActionOrder.PriceSellActual.Value * config.PERCEN_BUY / 100);
+                    decimal buyThresholdRunUp_Buy = lastActionOrder.PriceSellActual.Value + (lastActionOrder.PriceSellActual.Value * config.PERCEN_BUY / 100);
+                    if (currentPrice <= buyThreshold || (currentPrice >= buyThresholdRunUp_Buy && openSellOrders.Count() == 0))
                     {
-                        // Last action is Sold - use PriceSellActual for threshold calculation
-                        // Action ล่าสุดเป็นขายแล้ว - ใช้ PriceSellActual ในการคำนวณ threshold
-                        buyThreshold = lastActionOrder.PriceSellActual.Value * (1 - config.PERCEN_BUY / 100);
-                        if (currentPrice <= buyThreshold)
-                        {
-                            shouldCheckBuy = true;
-                        }
-                    }
-                    else if (!string.IsNullOrEmpty(lastActionOrder.OrderBuyID) && lastActionOrder.PriceBuy.HasValue)
-                    {
-                        // Last action is Buy (but not SOLD yet) - use PriceBuy for threshold calculation
-                        // Action ล่าสุดเป็น Buy (แต่ยังไม่ขาย) - ใช้ PriceBuy ในการคำนวณ threshold
-                        buyThreshold = lastActionOrder.PriceBuy.Value * (1 - config.PERCEN_BUY / 100);
-                        if (currentPrice <= buyThreshold)
-                        {
-                            shouldCheckBuy = true;
-                        }
+                        shouldCheckBuy = true;
                     }
                 }
+                else if (!string.IsNullOrEmpty(lastActionOrder.OrderBuyID) && lastActionOrder.PriceBuy.HasValue)
+                {
+                    // Last action is Buy (but not SOLD yet) - use PriceBuy for threshold calculation
+                    // Action ล่าสุดเป็น Buy (แต่ยังไม่ขาย) - ใช้ PriceBuy ในการคำนวณ threshold
+                    //   buyThreshold = lastActionOrder.PriceBuy.Value * (1 - config.PERCEN_BUY / 100);
+                    // A - (A * 2 / 100)
+                    buyThreshold = lastActionOrder.PriceBuy.Value - (lastActionOrder.PriceBuy.Value * config.PERCEN_BUY / 100);
+                    if (currentPrice <= buyThreshold)
+                    {
+                        shouldCheckBuy = true;
+                    }
+                }
+
                 // If lastActionOrder.Status == "WAITING_SELL", we don't check buy (waiting to sell)
                 // ถ้า lastActionOrder.Status == "WAITING_SELL" เราไม่ตรวจสอบการซื้อ (รอขายอยู่)
 
@@ -266,13 +282,13 @@ namespace BotGridV1.Services
                     Status = o.Status,
                     Symbol = o.Symbol
                 }).ToList();
-                
+
                 await CheckAndSellAsync(context, config, currentPrice, sellOrdersToCheck);
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, $"Error processing price update: {currentPrice}");
-                
+
                 // Log Error to Discord
                 if (_discordService != null && config != null)
                 {
@@ -288,55 +304,112 @@ namespace BotGridV1.Services
 
         private async Task CheckAndBuyAsync(ApplicationDbContext context, DbSetting config, decimal currentPrice, DbOrder? lastActionOrder = null, List<DbOrder>? openSellOrders = null)
         {
+            // Use a flag to track if we successfully acquired the buy lock
+            // ใช้ flag เพื่อติดตามว่าเราได้ lock สำหรับการซื้อสำเร็จหรือไม่
+            bool buyLockAcquired = false;
+
             try
             {
+                // Critical section: Check and update _lastBuyTime atomically
+                // ส่วนสำคัญ: ตรวจสอบและอัปเดต _lastBuyTime แบบ atomic
                 lock (_lockObject)
                 {
                     // Double check to prevent duplicate buys
                     // ตรวจสอบซ้ำเพื่อป้องกันการซื้อซ้ำ
-                    if (DateTime.UtcNow - _lastBuyTime < _minBuyInterval)
+                    // But allow if _lastBuyTime is still at initial value (first buy ever)
+                    // แต่ให้ผ่านได้ถ้า _lastBuyTime ยังเป็นค่าเริ่มต้น (การซื้อครั้งแรก)
+                    if (_lastBuyTime != DateTime.MinValue && DateTime.UtcNow - _lastBuyTime < _minBuyInterval)
                     {
+                        _logger.LogDebug($"Buy skipped: Too soon after last buy. Time since last buy: {DateTime.UtcNow - _lastBuyTime}");
                         return;
                     }
+
+                    // Update _lastBuyTime BEFORE placing order to prevent race condition
+                    // อัปเดต _lastBuyTime ก่อนวางคำสั่งซื้อเพื่อป้องกัน race condition
+                    _lastBuyTime = DateTime.UtcNow;
+                    buyLockAcquired = true;
+                    _logger.LogInformation($"Buy lock acquired at {_lastBuyTime:yyyy-MM-dd HH:mm:ss.fff}. Proceeding with buy order.");
                 }
 
-                // Re-validate buy condition using last action order or open sell orders
-                // ตรวจสอบเงื่อนไขการซื้ออีกครั้งโดยใช้ last action order หรือ open sell orders
+                // If we didn't acquire the lock, return immediately
+                // ถ้าเราไม่ได้ lock ให้ return ทันที
+                if (!buyLockAcquired)
+                {
+                    return;
+                }
+
+                // Re-validate buy condition using fresh data from database
+                // ตรวจสอบเงื่อนไขการซื้ออีกครั้งโดยใช้ข้อมูลใหม่จากฐานข้อมูล
+                // This prevents race condition where multiple threads pass initial check
+                // นี่ป้องกัน race condition ที่หลาย thread ผ่านการตรวจสอบเบื้องต้น
+                var freshLastActionOrder = await context.DbOrders
+                    .Where(o => o.Setting_ID == config.Id)
+                    .OrderByDescending(o => o.Id)
+                    .FirstOrDefaultAsync();
+
+                // Check if there's a very recent order (within last 5 seconds) that might not be in cache yet
+                // ตรวจสอบว่ามี order ที่เพิ่งสร้าง (ภายใน 5 วินาทีล่าสุด) ที่อาจยังไม่อยู่ใน cache
+                var recentOrder = freshLastActionOrder != null &&
+                    freshLastActionOrder.DateBuy.HasValue &&
+                    (DateTime.UtcNow - freshLastActionOrder.DateBuy.Value).TotalSeconds < 5
+                    ? freshLastActionOrder
+                    : null;
+
+                if (recentOrder != null && recentOrder.Status == "WAITING_SELL")
+                {
+                    _logger.LogWarning($"Buy cancelled: Recent order found (ID: {recentOrder.Id}, Status: {recentOrder.Status}) within 5 seconds. Possible duplicate buy prevented.");
+                    return; // Recent order exists, don't buy
+                }
+
                 decimal? threshold = null;
 
                 // Check if there are no orders at all - should buy immediately
                 // ตรวจสอบว่าไม่มี order เลย - ควรซื้อทันที
-                if (lastActionOrder == null)
+                if (freshLastActionOrder == null)
                 {
-                    // No orders at all - proceed to buy (no threshold check)
-                    // ไม่มี order เลย - ดำเนินการซื้อ (ไม่ต้องตรวจสอบ threshold)
-                    // threshold remains null, so we skip the threshold check below
+                    // No orders at all - proceed to buy immediately (no threshold check)
+                    // ไม่มี order เลย - ดำเนินการซื้อทันที (ไม่ต้องตรวจสอบ threshold)
+                    _logger.LogInformation($"No orders found in database. Proceeding to buy immediately at price: {currentPrice}");
+                    // threshold remains null, so we skip the threshold check below and proceed to buy
                 }
-                else if (lastActionOrder.Status != "WAITING_SELL")
+                // Last action is completed (not WAITING_SELL)
+                // Action ล่าสุดเสร็จสมบูรณ์แล้ว (ไม่ใช่รอขาย)
+                else if (freshLastActionOrder.Status == "SOLD" && freshLastActionOrder.PriceSellActual.HasValue)
                 {
-                    // Last action is completed (not WAITING_SELL)
-                    // Action ล่าสุดเสร็จสมบูรณ์แล้ว (ไม่ใช่รอขาย)
-                    if (lastActionOrder.Status == "SOLD" && lastActionOrder.PriceSellActual.HasValue)
-                    {
-                        // Last action is Sold - use PriceSellActual
-                        // Action ล่าสุดเป็นขายแล้ว - ใช้ PriceSellActual
-                        threshold = lastActionOrder.PriceSellActual.Value * (1 - config.PERCEN_BUY / 100);
-                    }
-                    else if (!string.IsNullOrEmpty(lastActionOrder.OrderBuyID) && lastActionOrder.PriceBuy.HasValue)
-                    {
-                        // Last action is Buy - use PriceBuy
-                        // Action ล่าสุดเป็น Buy - ใช้ PriceBuy
-                        threshold = lastActionOrder.PriceBuy.Value * (1 - config.PERCEN_BUY / 100);
-                    }
-                }
-                // If lastActionOrder.Status == "WAITING_SELL", we don't set threshold (should not buy)
-                // ถ้า lastActionOrder.Status == "WAITING_SELL" เราไม่ตั้ง threshold (ไม่ควรซื้อ)
+                    // Last action is Sold - use PriceSellActual
+                    // Action ล่าสุดเป็นขายแล้ว - ใช้ PriceSellActual
 
-                // Only check threshold if it was set (not null)
-                // ตรวจสอบ threshold เฉพาะเมื่อมีการตั้งค่า (ไม่ใช่ null)
-                if (threshold.HasValue && currentPrice > threshold.Value)
+                    threshold = freshLastActionOrder.PriceSellActual.Value - (freshLastActionOrder.PriceSellActual.Value * config.PERCEN_BUY / 100);
+                }
+                else if (!string.IsNullOrEmpty(freshLastActionOrder.OrderBuyID) && freshLastActionOrder.PriceBuy.HasValue)
                 {
+                    // Last action is Buy - use PriceBuy
+                    // Action ล่าสุดเป็น Buy - ใช้ PriceBuy
+                    threshold = freshLastActionOrder.PriceBuy.Value - (freshLastActionOrder.PriceBuy.Value * config.PERCEN_BUY / 100);
+                }
+                else
+                {
+                    // Last action is WAITING_SELL - don't buy
+                    // Action ล่าสุดเป็น WAITING_SELL - ไม่ซื้อ
+                    _logger.LogDebug($"Buy cancelled: Last action order is WAITING_SELL (ID: {freshLastActionOrder.Id})");
+                    return;
+                }
+
+                decimal buyThresholdRunUp_Buy = lastActionOrder.PriceSellActual.Value + (lastActionOrder.PriceSellActual.Value * config.PERCEN_BUY / 100);
+                // Only check threshold if it was set (not null)
+                // ถ้า threshold = null (ไม่มี order) ให้ซื้อทันที
+                // ตรวจสอบ threshold เฉพาะเมื่อมีการตั้งค่า (ไม่ใช่ null)
+                if (threshold.HasValue && currentPrice > threshold.Value && !(currentPrice >= buyThresholdRunUp_Buy && openSellOrders.Count() == 0))
+                {
+                    _logger.LogDebug($"Buy cancelled: Price {currentPrice} is above threshold {threshold.Value}");
                     return; // Price hasn't dropped enough ราคายังไม่ลดลงเพียงพอ
+                }
+
+                // If we reach here and threshold is null, it means no orders exist - proceed to buy
+                // ถ้าเรามาถึงจุดนี้และ threshold เป็น null หมายความว่าไม่มี order - ดำเนินการซื้อ
+                if (threshold == null)
+                {
+                    _logger.LogInformation($"No threshold check needed (no orders in database). Proceeding to buy at price: {currentPrice}");
                 }
 
                 // Create Binance client 
@@ -378,13 +451,13 @@ namespace BotGridV1.Services
                     }
                     // Stop the bot when balance is insufficient
                     // หยุด Bot เมื่อยอดไม่พอ
-                    await StopAsync();
+                    //  await StopAsync();
                     return;
                 }
 
                 // Calculate coin quantity from USD amount
                 // คำนวณจำนวน Coin จากจำนวนเงิน USD
-               // var quantity = CalculateCoinQuantity(buyAmountUSD, currentPrice, symbol);
+                // var quantity = CalculateCoinQuantity(buyAmountUSD, currentPrice, symbol);
 
                 // Place market buy order
                 // วางคำสั่งซื้อในตลาด
@@ -393,11 +466,11 @@ namespace BotGridV1.Services
                     side: OrderSide.Buy,
                     type: SpotOrderType.Market,
                     quoteQuantity: buyAmountUSD);
-             
+
                 if (!buyOrder.Success)
                 {
                     _logger.LogError($"Buy order failed: {buyOrder.Error?.Message}");
-                    
+
                     // Log Buy Not Success to Discord
                     if (_discordService != null)
                     {
@@ -409,11 +482,11 @@ namespace BotGridV1.Services
                             0
                         );
                     }
-                    
+
                     // Retry buy logic - wait a bit and try again
                     // ลอจิกการซื้อซ้ำ - รอสักครู่แล้วลองอีกครั้ง
                     await Task.Delay(1000); // Wait 1 second before retry
-                    
+
                     // Log Buy Retry to Discord
                     if (_discordService != null)
                     {
@@ -426,14 +499,14 @@ namespace BotGridV1.Services
                             buyOrder.Error?.Message ?? "Retrying after failure"
                         );
                     }
-                    
+
                     // Retry the buy order once
                     var retryBuyOrder = await restClient.SpotApi.Trading.PlaceOrderAsync(
                         symbol: symbol,
                         side: OrderSide.Buy,
                         type: SpotOrderType.Market,
                         quoteQuantity: buyAmountUSD);
-                    
+
                     if (!retryBuyOrder.Success)
                     {
                         _logger.LogError($"Buy order retry failed: {retryBuyOrder.Error?.Message}");
@@ -449,20 +522,20 @@ namespace BotGridV1.Services
                         }
                         return;
                     }
-                    
+
                     // Use retry order if successful
                     buyOrder = retryBuyOrder;
                 }
 
                 // Get actual coin quantity from buy order response
                 // รับจำนวน Coin จริงจากคำตอบคำสั่งซื้อ
-                var actualCoinQuantity = buyOrder.Data.QuantityFilled > 0 
-                    ? buyOrder.Data.QuantityFilled 
+                var actualCoinQuantity = buyOrder.Data.QuantityFilled > 0
+                    ? buyOrder.Data.QuantityFilled
                     : buyOrder.Data.Quantity;
 
                 // Calculate sell price with PERCEN_SELL
                 // คำนวณราคาขายด้วย PERCEN_SELL
-                var sellPrice = currentPrice * (1 + config.PERCEN_SELL / 100);
+                var sellPrice = currentPrice + (currentPrice * config.PERCEN_SELL / 100);
 
                 // Create order record
                 // สร้างบันทึกการสั่งซื้อ
@@ -484,11 +557,10 @@ namespace BotGridV1.Services
                 context.DbOrders.Add(dbOrder);
                 await context.SaveChangesAsync();
 
-                // Update cache
-                // อัปเดตแคช
+                // Update cache (note: _lastBuyTime was already updated before placing order)
+                // อัปเดตแคช (หมายเหตุ: _lastBuyTime ถูกอัปเดตแล้วก่อนวางคำสั่งซื้อ)
                 lock (_lockObject)
                 {
-                    _lastBuyTime = DateTime.UtcNow;
                     _orderCache.Add(new OrderCache
                     {
                         Id = dbOrder.Id,
@@ -502,7 +574,7 @@ namespace BotGridV1.Services
                 }
 
                 _logger.LogInformation($"Buy order placed: {buyOrder.Data.Id} at {currentPrice}, Sell target: {sellPrice}");
-                
+
                 // Log Buy Success to Discord
                 if (_discordService != null)
                 {
@@ -579,7 +651,7 @@ namespace BotGridV1.Services
                             }
 
                             _logger.LogInformation($"Sell order executed: {sellOrder.Data.Id} at {currentPrice}, Profit: {dbOrder.ProfitLoss}");
-                            
+
                             // Log Sell Success to Discord
                             if (_discordService != null)
                             {
@@ -634,7 +706,7 @@ namespace BotGridV1.Services
                 var orders = await context.DbOrders
                     .Where(o => o.Setting_ID == settingId && o.Status == "WAITING_SELL" && o.PriceWaitSell.HasValue)
                     .ToListAsync();
-                
+
                 orders = orders
                     .OrderBy(o => o.PriceWaitSell)
                     .Take(20)
@@ -679,7 +751,7 @@ namespace BotGridV1.Services
             // Most coins use 8 decimal places, but we'll use a safe default
             // เหรียญส่วนใหญ่ใช้ 8 ตำแหน่งทศนิยม แต่เราจะใช้ค่าเริ่มต้นที่ปลอดภัย
             var decimals = 4;
-            
+
             // Round down to avoid exceeding available balance
             // ปัดเศษลงเพื่อหลีกเลี่ยงการเกินยอดคงเหลือ
             var multiplier = (decimal)Math.Pow(10, decimals);
@@ -720,4 +792,5 @@ namespace BotGridV1.Services
         public string? Symbol { get; set; }
     }
 }
+
 

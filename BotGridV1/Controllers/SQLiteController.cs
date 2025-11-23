@@ -18,6 +18,8 @@ namespace BotGridV1.Controllers
             _logger = logger;
         }
 
+        #region setting
+
         /// <summary>
         /// Check if database and table exist, create if they don't
         /// ตรวจสอบว่าฐานข้อมูลและตารางมีอยู่หรือไม่ สร้างถ้ายังไม่มี
@@ -96,7 +98,7 @@ namespace BotGridV1.Controllers
             }
         }
 
-
+       
 
 
         /// <summary>
@@ -234,5 +236,414 @@ namespace BotGridV1.Controllers
         {
             return await _context.DbSettings.AnyAsync(e => e.Id == id);
         }
+        #endregion
+        #region Order APIs
+
+        /// <summary>
+        /// Get all orders
+        /// ดึงข้อมูล Order ทั้งหมด
+        /// </summary>
+        [HttpPost]
+        public async Task<IActionResult> GetOrders()
+        {
+            try
+            {
+                await _context.Database.EnsureCreatedAsync();
+                var orders = await _context.DbOrders
+                    .OrderByDescending(o => o.Id)
+                    .ToListAsync();
+                
+                return Ok(new
+                {
+                    success = true,
+                    count = orders.Count,
+                    data = orders
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error getting all orders");
+                return StatusCode(500, new { success = false, message = ex.Message });
+            }
+        }
+
+        /// <summary>
+        /// Get orders by Setting ID
+        /// ดึงข้อมูล Order ตาม Setting ID
+        /// </summary>
+        [HttpPost]
+        public async Task<IActionResult> GetOrdersBySettingId(req_GetById req)
+        {
+            try
+            {
+                await _context.Database.EnsureCreatedAsync();
+                var orders = await _context.DbOrders
+                    .Where(o => o.Setting_ID == req.id)
+                    .OrderByDescending(o => o.Id)
+                    .ToListAsync();
+                
+                return Ok(new
+                {
+                    success = true,
+                    settingId = req.id,
+                    count = orders.Count,
+                    data = orders
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error getting orders by setting ID");
+                return StatusCode(500, new { success = false, message = ex.Message });
+            }
+        }
+
+        /// <summary>
+        /// Get order by ID
+        /// ดึงข้อมูล Order ตาม ID
+        /// </summary>
+        [HttpPost]
+        public async Task<IActionResult> GetOrderById(req_GetById req)
+        {
+            try
+            {
+                await _context.Database.EnsureCreatedAsync();
+                var order = await _context.DbOrders.FindAsync(req.id);
+
+                if (order == null)
+                {
+                    return NotFound(new { success = false, message = $"Order with ID {req.id} not found" });
+                }
+
+                return Ok(new
+                {
+                    success = true,
+                    data = order
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error getting order by ID");
+                return StatusCode(500, new { success = false, message = ex.Message });
+            }
+        }
+
+        /// <summary>
+        /// Get orders by Status
+        /// ดึงข้อมูล Order ตาม Status
+        /// </summary>
+        [HttpPost]
+        public async Task<IActionResult> GetOrdersByStatus(req_GetOrdersByStatus req)
+        {
+            try
+            {
+                await _context.Database.EnsureCreatedAsync();
+                
+                var query = _context.DbOrders.AsQueryable();
+                
+                if (!string.IsNullOrEmpty(req.Status))
+                {
+                    query = query.Where(o => o.Status == req.Status);
+                }
+                
+                if (req.SettingId.HasValue)
+                {
+                    query = query.Where(o => o.Setting_ID == req.SettingId.Value);
+                }
+                
+                var orders = await query
+                    .OrderByDescending(o => o.Id)
+                    .ToListAsync();
+                
+                return Ok(new
+                {
+                    success = true,
+                    status = req.Status,
+                    settingId = req.SettingId,
+                    count = orders.Count,
+                    data = orders
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error getting orders by status");
+                return StatusCode(500, new { success = false, message = ex.Message });
+            }
+        }
+
+        /// <summary>
+        /// Update an existing order
+        /// อัปเดต Order ที่มีอยู่
+        /// </summary>
+        [HttpPost]
+        public async Task<IActionResult> UpdateOrder(DbOrder order)
+        {
+            try
+            {
+                await _context.Database.EnsureCreatedAsync();
+
+                if (!ModelState.IsValid)
+                {
+                    return BadRequest(ModelState);
+                }
+
+                var existingOrder = await _context.DbOrders.FindAsync(order.Id);
+                if (existingOrder == null)
+                {
+                    return NotFound(new { success = false, message = $"Order with ID {order.Id} not found" });
+                }
+
+                // Update properties
+                existingOrder.Timestamp = order.Timestamp;
+                existingOrder.OrderBuyID = order.OrderBuyID;
+                existingOrder.PriceBuy = order.PriceBuy;
+                existingOrder.PriceWaitSell = order.PriceWaitSell;
+                existingOrder.OrderSellID = order.OrderSellID;
+                existingOrder.PriceSellActual = order.PriceSellActual;
+                existingOrder.ProfitLoss = order.ProfitLoss;
+                existingOrder.DateBuy = order.DateBuy;
+                existingOrder.DateSell = order.DateSell;
+                existingOrder.Setting_ID = order.Setting_ID;
+                existingOrder.Status = order.Status;
+                existingOrder.Symbol = order.Symbol;
+                existingOrder.Quantity = order.Quantity;
+                existingOrder.BuyAmountUSD = order.BuyAmountUSD;
+                existingOrder.CoinQuantity = order.CoinQuantity;
+
+                await _context.SaveChangesAsync();
+
+                return Ok(new { success = true, message = "Order updated successfully", data = existingOrder });
+            }
+            catch (DbUpdateConcurrencyException)
+            {
+                if (!await OrderExists(order.Id))
+                {
+                    return NotFound(new { success = false, message = $"Order with ID {order.Id} not found" });
+                }
+                throw;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error updating order");
+                return StatusCode(500, new { success = false, message = ex.Message });
+            }
+        }
+
+        /// <summary>
+        /// Delete an order
+        /// ลบ Order
+        /// </summary>
+        [HttpPost]
+        public async Task<IActionResult> DeleteOrder(req_GetById req)
+        {
+            try
+            {
+                await _context.Database.EnsureCreatedAsync();
+
+                // Check if order exists first
+                // ตรวจสอบว่า order มีอยู่หรือไม่ก่อน
+                var orderExists = await _context.DbOrders.AnyAsync(o => o.Id == req.id);
+                if (!orderExists)
+                {
+                    return NotFound(new { success = false, message = $"Order with ID {req.id} not found" });
+                }
+
+                // Use ExecuteSqlRaw to delete directly (avoids EF tracking issues)
+                // ใช้ ExecuteSqlRaw เพื่อลบโดยตรง (หลีกเลี่ยงปัญหา EF tracking)
+                var rowsAffected = await _context.Database.ExecuteSqlRawAsync(
+                    "DELETE FROM db_Order WHERE id = {0}", req.id);
+
+                if (rowsAffected == 0)
+                {
+                    return NotFound(new { success = false, message = $"Order with ID {req.id} not found or already deleted" });
+                }
+
+                return Ok(new 
+                { 
+                    success = true, 
+                    message = "Order deleted successfully", 
+                    deletedOrderId = req.id,
+                    rowsAffected = rowsAffected
+                });
+            }
+            catch (DbUpdateException dbEx)
+            {
+                _logger.LogError(dbEx, "Database error deleting order");
+                var innerException = dbEx.InnerException?.Message ?? dbEx.Message;
+                return StatusCode(500, new 
+                { 
+                    success = false, 
+                    message = "Error deleting order from database",
+                    error = innerException,
+                    details = dbEx.ToString()
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error deleting order");
+                return StatusCode(500, new 
+                { 
+                    success = false, 
+                    message = ex.Message,
+                    error = ex.ToString()
+                });
+            }
+        }
+
+        /// <summary>
+        /// Delete multiple orders by IDs
+        /// ลบ Order หลายตัวตาม IDs
+        /// </summary>
+        [HttpPost]
+        public async Task<IActionResult> DeleteOrders(req_DeleteOrders req)
+        {
+            try
+            {
+                await _context.Database.EnsureCreatedAsync();
+
+                if (req.Ids == null || req.Ids.Count == 0)
+                {
+                    return BadRequest(new { success = false, message = "Order IDs are required" });
+                }
+
+                var orders = await _context.DbOrders
+                    .Where(o => req.Ids.Contains(o.Id))
+                    .ToListAsync();
+
+                if (orders.Count == 0)
+                {
+                    return NotFound(new { success = false, message = "No orders found with the provided IDs" });
+                }
+
+                // Detach entities to avoid tracking issues
+                // แยก entities เพื่อหลีกเลี่ยงปัญหา tracking
+                foreach (var order in orders)
+                {
+                    _context.Entry(order).State = EntityState.Detached;
+                }
+                
+                // Re-attach and mark for deletion
+                // เชื่อมต่อใหม่และทำเครื่องหมายเพื่อลบ
+                _context.DbOrders.AttachRange(orders);
+                _context.DbOrders.RemoveRange(orders);
+                
+                var result = await _context.SaveChangesAsync();
+
+                return Ok(new 
+                { 
+                    success = true, 
+                    message = $"Deleted {orders.Count} order(s) successfully",
+                    deletedCount = orders.Count,
+                    rowsAffected = result,
+                    deletedIds = orders.Select(o => o.Id).ToList()
+                });
+            }
+            catch (DbUpdateException dbEx)
+            {
+                _logger.LogError(dbEx, "Database error deleting orders");
+                var innerException = dbEx.InnerException?.Message ?? dbEx.Message;
+                return StatusCode(500, new 
+                { 
+                    success = false, 
+                    message = "Error deleting orders from database",
+                    error = innerException,
+                    details = dbEx.ToString()
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error deleting orders");
+                return StatusCode(500, new 
+                { 
+                    success = false, 
+                    message = ex.Message,
+                    error = ex.ToString()
+                });
+            }
+        }
+
+        /// <summary>
+        /// Delete orders by Status
+        /// ลบ Order ตาม Status
+        /// </summary>
+        [HttpPost]
+        public async Task<IActionResult> DeleteOrdersByStatus(req_DeleteOrdersByStatus req)
+        {
+            try
+            {
+                await _context.Database.EnsureCreatedAsync();
+
+                if (string.IsNullOrEmpty(req.Status))
+                {
+                    return BadRequest(new { success = false, message = "Status is required" });
+                }
+
+                var query = _context.DbOrders.Where(o => o.Status == req.Status);
+                
+                if (req.SettingId.HasValue)
+                {
+                    query = query.Where(o => o.Setting_ID == req.SettingId.Value);
+                }
+
+                var orders = await query.ToListAsync();
+
+                if (orders.Count == 0)
+                {
+                    return NotFound(new { success = false, message = $"No orders found with Status: {req.Status}" });
+                }
+
+                // Detach entities to avoid tracking issues
+                // แยก entities เพื่อหลีกเลี่ยงปัญหา tracking
+                foreach (var order in orders)
+                {
+                    _context.Entry(order).State = EntityState.Detached;
+                }
+                
+                // Re-attach and mark for deletion
+                // เชื่อมต่อใหม่และทำเครื่องหมายเพื่อลบ
+                _context.DbOrders.AttachRange(orders);
+                _context.DbOrders.RemoveRange(orders);
+                
+                var result = await _context.SaveChangesAsync();
+
+                return Ok(new 
+                { 
+                    success = true, 
+                    message = $"Deleted {orders.Count} order(s) with Status: {req.Status}",
+                    deletedCount = orders.Count,
+                    rowsAffected = result,
+                    status = req.Status,
+                    settingId = req.SettingId
+                });
+            }
+            catch (DbUpdateException dbEx)
+            {
+                _logger.LogError(dbEx, "Database error deleting orders by status");
+                var innerException = dbEx.InnerException?.Message ?? dbEx.Message;
+                return StatusCode(500, new 
+                { 
+                    success = false, 
+                    message = "Error deleting orders from database",
+                    error = innerException,
+                    details = dbEx.ToString()
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error deleting orders by status");
+                return StatusCode(500, new 
+                { 
+                    success = false, 
+                    message = ex.Message,
+                    error = ex.ToString()
+                });
+            }
+        }
+
+        private async Task<bool> OrderExists(int id)
+        {
+            return await _context.DbOrders.AnyAsync(e => e.Id == id);
+        }
+
+        #endregion
     }
 }
