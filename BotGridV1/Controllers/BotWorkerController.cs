@@ -3,6 +3,8 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using BotGridV1.Services;
 using BotGridV1.Models.Binace;
+using BotGridV1.Models.SQLite;
+using Microsoft.EntityFrameworkCore;
 
 namespace BotGridV1.Controllers
 {
@@ -12,13 +14,15 @@ namespace BotGridV1.Controllers
     {
         private readonly BotWorkerService _botWorkerService;
         private readonly ILogger<BotWorkerController> _logger;
+        private readonly IServiceProvider _serviceProvider;
         private BinanceSocketClient? _socketClient;
         private Dictionary<string, System.Threading.CancellationTokenSource> _subscriptions = new();
 
-        public BotWorkerController(BotWorkerService botWorkerService, ILogger<BotWorkerController> logger)
+        public BotWorkerController(BotWorkerService botWorkerService, ILogger<BotWorkerController> logger, IServiceProvider serviceProvider)
         {
             _botWorkerService = botWorkerService;
             _logger = logger;
+            _serviceProvider = serviceProvider;
         }
 
         /// <summary>
@@ -87,6 +91,70 @@ namespace BotGridV1.Controllers
         {
             try
             {
+                // Check if bot is already running
+                if (_botWorkerService.IsRunning)
+                {
+                    return BadRequest(new
+                    {
+                        success = false,
+                        message = "Bot worker is already running",
+                        status = "RUNNING",
+                        error = "Bot is already started. Please stop it first."
+                    });
+                }
+
+                // Validate configuration before starting
+                using var scope = _serviceProvider.CreateScope();
+                var context = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+                await context.Database.EnsureCreatedAsync();
+
+                var config = req.ConfigId.HasValue
+                    ? await context.DbSettings.FindAsync(req.ConfigId.Value)
+                    : await context.DbSettings.FirstOrDefaultAsync();
+
+                var validationErrors = new List<string>();
+
+                if (config == null)
+                {
+                    validationErrors.Add("Configuration not found. Please create a configuration first.");
+                }
+                else
+                {
+                    if (string.IsNullOrEmpty(config.API_KEY))
+                    {
+                        validationErrors.Add("API_KEY is missing in configuration");
+                    }
+
+                    if (string.IsNullOrEmpty(config.API_SECRET))
+                    {
+                        validationErrors.Add("API_SECRET is missing in configuration");
+                    }
+
+                    if (string.IsNullOrEmpty(config.SYMBOL))
+                    {
+                        validationErrors.Add("SYMBOL is missing in configuration");
+                    }
+
+                    if (!config.BuyAmountUSD.HasValue || config.BuyAmountUSD.Value <= 0)
+                    {
+                        validationErrors.Add("BuyAmountUSD is not configured or invalid");
+                    }
+                }
+
+                if (validationErrors.Any())
+                {
+                    return BadRequest(new
+                    {
+                        success = false,
+                        message = "Configuration validation failed",
+                        status = "STOPPED",
+                        errors = validationErrors,
+                        configId = req.ConfigId,
+                        suggestion = "Please check your configuration using GET /api/SQLite/GetById or create/update using POST /api/SQLite/CreateSetting or POST /api/SQLite/Update"
+                    });
+                }
+
+                // Try to start the bot
                 var result = await _botWorkerService.StartAsync(req.ConfigId);
 
                 if (result)
@@ -95,7 +163,9 @@ namespace BotGridV1.Controllers
                     {
                         success = true,
                         message = "Bot worker started successfully",
-                        status = "RUNNING"
+                        status = "RUNNING",
+                        configId = config!.Id,
+                        symbol = config.SYMBOL
                     });
                 }
                 else
@@ -103,8 +173,11 @@ namespace BotGridV1.Controllers
                     return BadRequest(new
                     {
                         success = false,
-                        message = "Failed to start bot worker. Check configuration and API credentials.",
-                        status = "STOPPED"
+                        message = "Failed to start bot worker. Possible causes: WebSocket connection failed, invalid API credentials, or network issues.",
+                        status = "STOPPED",
+                        configId = config!.Id,
+                        symbol = config.SYMBOL,
+                        suggestion = "Check logs for detailed error messages. Verify API credentials and network connectivity."
                     });
                 }
             }

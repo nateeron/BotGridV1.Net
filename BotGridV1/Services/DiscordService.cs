@@ -7,11 +7,54 @@ namespace BotGridV1.Services
     {
         private readonly HttpClient _httpClient;
         private readonly ILogger<DiscordService> _logger;
+        private readonly Dictionary<string, DateTime> _lastAlertTimes = new Dictionary<string, DateTime>();
+        private readonly object _alertLock = new object();
+        private readonly TimeSpan _alertCooldown = TimeSpan.FromMinutes(5); // 5 minutes cooldown
 
         public DiscordService(HttpClient httpClient, ILogger<DiscordService> logger)
         {
             _httpClient = httpClient;
             _logger = logger;
+        }
+
+        /// <summary>
+        /// Check if alert should be sent (rate limiting - 5 minutes cooldown)
+        /// ตรวจสอบว่า alert ควรส่งหรือไม่ (rate limiting - รอ 5 นาที)
+        /// </summary>
+        private bool ShouldSendAlert(string alertKey)
+        {
+            lock (_alertLock)
+            {
+                if (_lastAlertTimes.TryGetValue(alertKey, out var lastTime))
+                {
+                    if (DateTime.UtcNow - lastTime < _alertCooldown)
+                    {
+                        // Still in cooldown period
+                        // ยังอยู่ในช่วง cooldown
+                        return false;
+                    }
+                }
+                
+                // Update last alert time
+                // อัปเดตเวลาที่ส่ง alert ล่าสุด
+                _lastAlertTimes[alertKey] = DateTime.UtcNow;
+                return true;
+            }
+        }
+
+        /// <summary>
+        /// Generate alert key for rate limiting
+        /// สร้าง key สำหรับ rate limiting
+        /// </summary>
+        private string GenerateAlertKey(string webhookUrl, string title, string description)
+        {
+            // Use webhook + title + description as key (normalize description to remove variable parts)
+            // ใช้ webhook + title + description เป็น key (ทำให้ description เป็นมาตรฐานเพื่อลบส่วนที่เปลี่ยนแปลง)
+            var normalizedDesc = description;
+            // Remove variable parts like prices, quantities, etc. to group similar alerts
+            // ลบส่วนที่เปลี่ยนแปลง เช่น ราคา, จำนวน เป็นต้น เพื่อจัดกลุ่ม alert ที่คล้ายกัน
+            normalizedDesc = System.Text.RegularExpressions.Regex.Replace(normalizedDesc, @"\d+\.?\d*", "X");
+            return $"{webhookUrl}_{title}_{normalizedDesc}";
         }
 
         /// <summary>
@@ -22,6 +65,15 @@ namespace BotGridV1.Services
             if (string.IsNullOrEmpty(webhookUrl))
             {
                 return false;
+            }
+
+            // Check rate limiting
+            // ตรวจสอบ rate limiting
+            var alertKey = GenerateAlertKey(webhookUrl, title, description);
+            if (!ShouldSendAlert(alertKey))
+            {
+                _logger.LogDebug($"Alert skipped due to cooldown: {title}");
+                return false; // Skip sending due to cooldown
             }
 
             try

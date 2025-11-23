@@ -197,18 +197,29 @@ namespace BotGridV1.Services
 
                 // Get open sell orders (Status WAITING_SELL, top 20, order by PriceWaitSell asc)
                 // รับ order ขายที่เปิดอยู่ (Status WAITING_SELL, top 20, order by PriceWaitSell asc)
+                // SQLite doesn't support decimal in ORDER BY, so we order in memory after fetching
+                // SQLite ไม่รองรับ decimal ใน ORDER BY ดังนั้นเราจะเรียงใน memory หลังจากดึงข้อมูล
                 var openSellOrders = await context.DbOrders
                     .Where(o => o.Setting_ID == config.Id && o.Status == "WAITING_SELL" && o.PriceWaitSell.HasValue)
+                    .ToListAsync();
+                
+                openSellOrders = openSellOrders
                     .OrderBy(o => o.PriceWaitSell)
                     .Take(20)
-                    .ToListAsync();
+                    .ToList();
 
                 bool shouldCheckBuy = false;
                 decimal? buyThreshold = null;
 
                 // Check if last action is a completed order (Buy or Sold, not WAITING_SELL)
                 // ตรวจสอบว่า action ล่าสุดเป็น order ที่ถูก Action แล้ว (Buy หรือขายแล้ว ไม่ใช่รอขาย)
-                if (lastActionOrder != null && lastActionOrder.Status != "WAITING_SELL")
+                if (lastActionOrder == null)
+                {
+                    // No orders at all - should buy immediately
+                    // ไม่มี order เลย - ควรซื้อทันที
+                    shouldCheckBuy = true;
+                }
+                else if (lastActionOrder.Status != "WAITING_SELL")
                 {
                     // Last action is completed (SOLD or other completed status)
                     // Action ล่าสุดเสร็จสมบูรณ์แล้ว (SOLD หรือ status อื่นที่เสร็จแล้ว)
@@ -233,23 +244,8 @@ namespace BotGridV1.Services
                         }
                     }
                 }
-                //else if (openSellOrders.Any())
-                //{
-                //    // Last action is not Buy or no last action - use lowest PriceWaitSell from open sell orders
-                //    // Action ล่าสุดไม่ใช่ Buy หรือไม่มี action - ใช้ PriceWaitSell ต่ำสุดจาก order ขายที่เปิดอยู่
-                //    var lowestSellPrice = openSellOrders.First().PriceWaitSell!.Value;
-                //    buyThreshold = lowestSellPrice * (1 - config.PERCEN_BUY / 100);
-                //    if (currentPrice <= buyThreshold)
-                //    {
-                //        shouldCheckBuy = true;
-                //    }
-                //}
-                else
-                {
-                    // No orders at all - check if we should buy
-                    // ไม่มี order เลย - ตรวจสอบว่าควรซื้อหรือไม่
-                    shouldCheckBuy = true;
-                }
+                // If lastActionOrder.Status == "WAITING_SELL", we don't check buy (waiting to sell)
+                // ถ้า lastActionOrder.Status == "WAITING_SELL" เราไม่ตรวจสอบการซื้อ (รอขายอยู่)
 
                 if (shouldCheckBuy)
                 {
@@ -308,7 +304,15 @@ namespace BotGridV1.Services
                 // ตรวจสอบเงื่อนไขการซื้ออีกครั้งโดยใช้ last action order หรือ open sell orders
                 decimal? threshold = null;
 
-                if (lastActionOrder != null && lastActionOrder.Status != "WAITING_SELL")
+                // Check if there are no orders at all - should buy immediately
+                // ตรวจสอบว่าไม่มี order เลย - ควรซื้อทันที
+                if (lastActionOrder == null)
+                {
+                    // No orders at all - proceed to buy (no threshold check)
+                    // ไม่มี order เลย - ดำเนินการซื้อ (ไม่ต้องตรวจสอบ threshold)
+                    // threshold remains null, so we skip the threshold check below
+                }
+                else if (lastActionOrder.Status != "WAITING_SELL")
                 {
                     // Last action is completed (not WAITING_SELL)
                     // Action ล่าสุดเสร็จสมบูรณ์แล้ว (ไม่ใช่รอขาย)
@@ -325,14 +329,11 @@ namespace BotGridV1.Services
                         threshold = lastActionOrder.PriceBuy.Value * (1 - config.PERCEN_BUY / 100);
                     }
                 }
-                else if (openSellOrders != null && openSellOrders.Any())
-                {
-                    // Use lowest PriceWaitSell from open sell orders
-                    // ใช้ PriceWaitSell ต่ำสุดจาก order ขายที่เปิดอยู่
-                    var lowestSellPrice = openSellOrders.First().PriceWaitSell!.Value;
-                    threshold = lowestSellPrice * (1 - config.PERCEN_BUY / 100);
-                }
+                // If lastActionOrder.Status == "WAITING_SELL", we don't set threshold (should not buy)
+                // ถ้า lastActionOrder.Status == "WAITING_SELL" เราไม่ตั้ง threshold (ไม่ควรซื้อ)
 
+                // Only check threshold if it was set (not null)
+                // ตรวจสอบ threshold เฉพาะเมื่อมีการตั้งค่า (ไม่ใช่ null)
                 if (threshold.HasValue && currentPrice > threshold.Value)
                 {
                     return; // Price hasn't dropped enough ราคายังไม่ลดลงเพียงพอ
@@ -628,11 +629,16 @@ namespace BotGridV1.Services
         {
             try
             {
+                // SQLite doesn't support decimal in ORDER BY, so we order in memory after fetching
+                // SQLite ไม่รองรับ decimal ใน ORDER BY ดังนั้นเราจะเรียงใน memory หลังจากดึงข้อมูล
                 var orders = await context.DbOrders
-                    .Where(o => o.Setting_ID == settingId && o.Status == "WAITING_SELL")
+                    .Where(o => o.Setting_ID == settingId && o.Status == "WAITING_SELL" && o.PriceWaitSell.HasValue)
+                    .ToListAsync();
+                
+                orders = orders
                     .OrderBy(o => o.PriceWaitSell)
                     .Take(20)
-                    .ToListAsync();
+                    .ToList();
 
                 lock (_lockObject)
                 {

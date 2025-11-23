@@ -240,37 +240,54 @@ var lastActionOrder = await context.DbOrders
     .FirstOrDefaultAsync();
 
 // Open Sell Orders (Status WAITING_SELL, Top 20, Order by PriceWaitSell asc)
+// Note: SQLite doesn't support decimal in ORDER BY, so we order in memory
+// หมายเหตุ: SQLite ไม่รองรับ decimal ใน ORDER BY ดังนั้นเราจะเรียงใน memory
 var openSellOrders = await context.DbOrders
     .Where(o => o.Setting_ID == config.Id && o.Status == "WAITING_SELL" && o.PriceWaitSell.HasValue)
+    .ToListAsync();
+
+openSellOrders = openSellOrders
     .OrderBy(o => o.PriceWaitSell)
     .Take(20)
-    .ToListAsync();
+    .ToList();
 ```
 
 ### 4. คำนวณ Buy Threshold
 
-**กรณีที่ 1: Last Action เป็น Buy Order**
+**กรณีที่ 1: ไม่มี Order เลย (เริ่มต้นใหม่)**
 ```csharp
-if (lastActionOrder != null && !string.IsNullOrEmpty(lastActionOrder.OrderBuyID) && lastActionOrder.PriceBuy.HasValue) {
+if (lastActionOrder == null) {
+    shouldCheckBuy = true; // ซื้อทันที (ไม่ต้องรอ threshold)
+}
+```
+
+**กรณีที่ 2: Last Action เป็น Order ที่ขายแล้ว (SOLD)**
+```csharp
+else if (lastActionOrder.Status == "SOLD" && lastActionOrder.PriceSellActual.HasValue) {
+    buyThreshold = lastActionOrder.PriceSellActual.Value * (1 - config.PERCEN_BUY / 100);
+    // ตัวอย่าง: PriceSellActual = 2.0539, PERCEN_BUY = 1.25%
+    // buyThreshold = 2.0539 * (1 - 1.25/100) = 2.028225125
+    if (currentPrice <= buyThreshold) {
+        shouldCheckBuy = true;
+    }
+}
+```
+
+**กรณีที่ 3: Last Action เป็น Buy Order (แต่ยังไม่ขาย)**
+```csharp
+else if (!string.IsNullOrEmpty(lastActionOrder.OrderBuyID) && lastActionOrder.PriceBuy.HasValue) {
     buyThreshold = lastActionOrder.PriceBuy.Value * (1 - config.PERCEN_BUY / 100);
     // ตัวอย่าง: PriceBuy = 2.0447, PERCEN_BUY = 1.25%
     // buyThreshold = 2.0447 * (1 - 1.25/100) = 2.0191425
+    if (currentPrice <= buyThreshold) {
+        shouldCheckBuy = true;
+    }
 }
 ```
 
-**กรณีที่ 2: Last Action ไม่ใช่ Buy หรือไม่มี Last Action**
+**กรณีที่ 4: Last Action เป็น WAITING_SELL (รอขายอยู่)**
 ```csharp
-else if (openSellOrders.Any()) {
-    var lowestSellPrice = openSellOrders.First().PriceWaitSell!.Value;
-    buyThreshold = lowestSellPrice * (1 - config.PERCEN_BUY / 100);
-}
-```
-
-**กรณีที่ 3: ไม่มี Order เลย**
-```csharp
-else {
-    shouldCheckBuy = true; // ตรวจสอบว่าควรซื้อหรือไม่
-}
+// ไม่ตรวจสอบการซื้อ (รอขายอยู่)
 ```
 
 ### 5. ตรวจสอบเงื่อนไขการซื้อ
@@ -299,10 +316,22 @@ if (DateTime.UtcNow - _lastBuyTime < _minBuyInterval) {
 }
 ```
 
-### 2. ตรวจสอบ Buy Threshold
+### 2. ตรวจสอบ Buy Threshold (Re-validate)
 
 ```csharp
-// Re-validate using lastActionOrder or openSellOrders
+// Check if there are no orders at all - should buy immediately
+if (lastActionOrder == null) {
+    // No orders at all - proceed to buy (no threshold check)
+    // threshold remains null, so we skip the threshold check below
+}
+else if (lastActionOrder.Status == "SOLD" && lastActionOrder.PriceSellActual.HasValue) {
+    threshold = lastActionOrder.PriceSellActual.Value * (1 - config.PERCEN_BUY / 100);
+}
+else if (!string.IsNullOrEmpty(lastActionOrder.OrderBuyID) && lastActionOrder.PriceBuy.HasValue) {
+    threshold = lastActionOrder.PriceBuy.Value * (1 - config.PERCEN_BUY / 100);
+}
+
+// Only check threshold if it was set (not null)
 if (threshold.HasValue && currentPrice > threshold.Value) {
     return; // ราคายังไม่ลดลงเพียงพอ
 }
@@ -730,6 +759,18 @@ Content-Type: application/json
 6. **Buy Retry** - เมื่อทำการซื้อซ้ำ
 7. **Errors** - ข้อผิดพลาดต่างๆ
 
+### ⏱️ Rate Limiting
+
+ระบบมี Rate Limiting เพื่อป้องกันการส่ง Alert ซ้ำๆ:
+- **Cooldown Period**: 5 นาที
+- **การทำงาน**: Alert แบบเดียวกัน (webhook + title + description) จะถูกส่งได้เพียงครั้งเดียวทุก 5 นาที
+- **ตัวอย่าง**: 
+  - เวลา 10:00 - ส่ง "Insufficient USDT balance" → ✅ ส่งสำเร็จ
+  - เวลา 10:02 - พยายามส่ง "Insufficient USDT balance" → ❌ ข้าม (ยังไม่ถึง 5 นาที)
+  - เวลา 10:05 - พยายามส่ง "Insufficient USDT balance" → ✅ ส่งสำเร็จ (ผ่าน 5 นาทีแล้ว)
+
+**หมายเหตุ**: Alert สำคัญเช่น Buy/Sell Success จะถูกส่งทุกครั้ง (ไม่มี rate limiting)
+
 ### 📝 ตัวอย่าง Discord Message
 
 **Buy Order:**
@@ -760,11 +801,16 @@ Profit/Loss: 📈 0.00920115
 
 ## ⚠️ ข้อควรระวัง
 
-1. **ยอด USDT ไม่พอ**: ระบบจะหยุดทำงานทันทีเมื่อยอด USDT ไม่พอ
+1. **ยอด USDT ไม่พอ**: ระบบจะหยุดทำงานทันทีเมื่อยอด USDT ไม่พอ (ไม่มีการใช้ยอดที่มีแทน)
 2. **Duplicate Buy Prevention**: ระบบจะรอ 2 วินาทีระหว่างการซื้อแต่ละครั้ง
-3. **Buy Threshold**: ราคาต้องลดลงจากราคาซื้อล่าสุดตาม PERCEN_BUY ก่อนจะซื้อ
+3. **Buy Threshold Logic**:
+   - ถ้าไม่มี Order เลย → ซื้อทันที (ไม่ต้องรอ threshold)
+   - ถ้ามี Order ที่ขายแล้ว (SOLD) → ใช้ `PriceSellActual` คำนวณ threshold
+   - ถ้ามี Order ที่ซื้อแล้ว → ใช้ `PriceBuy` คำนวณ threshold
+   - ถ้ามี Order ที่รอขาย (WAITING_SELL) → ไม่ซื้อ (รอขายอยู่)
 4. **Sell Threshold**: ราคาต้องเพิ่มขึ้นถึง PriceWaitSell ถึงจะขาย
 5. **Order Cache**: Cache จะ reload อัตโนมัติเมื่อมี Order ขายเหลือ <= 2
+6. **Discord Rate Limiting**: Alert แบบเดียวกันจะถูกส่งได้เพียงครั้งเดียวทุก 5 นาที
 
 ---
 

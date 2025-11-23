@@ -20,31 +20,60 @@ namespace BotGridV1.Controllers
 
         /// <summary>
         /// Check if database and table exist, create if they don't
+        /// ตรวจสอบว่าฐานข้อมูลและตารางมีอยู่หรือไม่ สร้างถ้ายังไม่มี
         /// </summary>
-        [HttpPost("check-database")]
+        [HttpPost]
         public async Task<IActionResult> CheckAndCreateDatabase()
         {
             try
             {
                 // Ensure database is created
+                // สร้างฐานข้อมูลถ้ายังไม่มี
                 await _context.Database.EnsureCreatedAsync();
 
                 // Check if table exists and has data
-                var exists = await _context.DbSettings.AnyAsync();
+                // ตรวจสอบว่าตารางมีอยู่และมีข้อมูลหรือไม่
+                var hasSettings = await _context.DbSettings.AnyAsync();
+                var hasOrders = await _context.DbOrders.AnyAsync();
+                
+                // Get table counts
+                // นับจำนวนข้อมูลในตาราง
+                var settingsCount = await _context.DbSettings.CountAsync();
+                var ordersCount = await _context.DbOrders.CountAsync();
                 
                 return Ok(new
                 {
                     success = true,
                     databaseExists = true,
-                    tableExists = true,
-                    hasData = exists,
-                    message = exists ? "Database and table exist with data" : "Database and table created successfully"
+                    tables = new
+                    {
+                        db_setting = new
+                        {
+                            exists = true,
+                            hasData = hasSettings,
+                            count = settingsCount
+                        },
+                        db_Order = new
+                        {
+                            exists = true,
+                            hasData = hasOrders,
+                            count = ordersCount
+                        }
+                    },
+                    message = hasSettings || hasOrders 
+                        ? $"Database and tables exist. Settings: {settingsCount}, Orders: {ordersCount}" 
+                        : "Database and tables created successfully (no data yet)"
                 });
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error checking/creating database");
-                return StatusCode(500, new { success = false, message = ex.Message });
+                return StatusCode(500, new 
+                { 
+                    success = false, 
+                    message = ex.Message,
+                    error = ex.ToString()
+                });
             }
         }
 
