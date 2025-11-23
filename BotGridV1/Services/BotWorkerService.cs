@@ -51,7 +51,8 @@ namespace BotGridV1.Services
 
                 if (config == null || string.IsNullOrEmpty(config.API_KEY) || string.IsNullOrEmpty(config.API_SECRET))
                 {
-                    _logger.LogError("Configuration not found or API credentials missing");
+                    // Alert to Discord only (no logging to save RAM/CPU)
+                    // แจ้งเตือนไปยัง Discord เท่านั้น (ไม่ log เพื่อประหยัด RAM/CPU)
                     if (_discordService != null && config != null)
                     {
                         await _discordService.LogErrorAsync(config.DisCord_Hook1, config.DisCord_Hook2,
@@ -62,7 +63,8 @@ namespace BotGridV1.Services
 
                 if (string.IsNullOrEmpty(config.SYMBOL))
                 {
-                    _logger.LogError("Symbol not configured");
+                    // Alert to Discord only (no logging to save RAM/CPU)
+                    // แจ้งเตือนไปยัง Discord เท่านั้น (ไม่ log เพื่อประหยัด RAM/CPU)
                     if (_discordService != null)
                     {
                         await _discordService.LogErrorAsync(config.DisCord_Hook1, config.DisCord_Hook2,
@@ -93,7 +95,8 @@ namespace BotGridV1.Services
 
                 if (!subscription.Success)
                 {
-                    _logger.LogError($"Failed to subscribe to {symbol}: {subscription.Error?.Message}");
+                    // Alert to Discord only (no logging to save RAM/CPU)
+                    // แจ้งเตือนไปยัง Discord เท่านั้น (ไม่ log เพื่อประหยัด RAM/CPU)
                     if (_discordService != null)
                     {
                         await _discordService.LogErrorAsync(config.DisCord_Hook1, config.DisCord_Hook2,
@@ -115,7 +118,13 @@ namespace BotGridV1.Services
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error starting bot worker");
+                // Alert to Discord only (no logging to save RAM/CPU)
+                // แจ้งเตือนไปยัง Discord เท่านั้น (ไม่ log เพื่อประหยัด RAM/CPU)
+                if (_discordService != null && _currentConfig != null)
+                {
+                    await _discordService.LogErrorAsync(_currentConfig.DisCord_Hook1, _currentConfig.DisCord_Hook2,
+                        "Error starting bot worker", ex.Message);
+                }
                 return false;
             }
         }
@@ -147,7 +156,8 @@ namespace BotGridV1.Services
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error stopping bot worker");
+                // Alert to Discord only (no logging to save RAM/CPU)
+                // แจ้งเตือนไปยัง Discord เท่านั้น (ไม่ log เพื่อประหยัด RAM/CPU)
                 if (_discordService != null && _currentConfig != null)
                 {
                     await _discordService.LogErrorAsync(_currentConfig.DisCord_Hook1, _currentConfig.DisCord_Hook2,
@@ -438,7 +448,17 @@ namespace BotGridV1.Services
                 var accountInfo = await restClient.SpotApi.Account.GetAccountInfoAsync();
                 if (!accountInfo.Success)
                 {
-                    _logger.LogError($"Failed to get account info: {accountInfo.Error?.Message}");
+                    // Alert to Discord only (no logging to save RAM/CPU)
+                    // แจ้งเตือนไปยัง Discord เท่านั้น (ไม่ log เพื่อประหยัด RAM/CPU)
+                    if (_discordService != null)
+                    {
+                        await _discordService.LogErrorAsync(
+                            config.DisCord_Hook1,
+                            config.DisCord_Hook2,
+                            $"Failed to get account info for {symbol}",
+                            accountInfo.Error?.Message ?? "Unknown error"
+                        );
+                    }
                     return;
                 }
 
@@ -475,9 +495,8 @@ namespace BotGridV1.Services
 
                 if (!buyOrder.Success)
                 {
-                    _logger.LogError($"Buy order failed: {buyOrder.Error?.Message}");
-
-                    // Log Buy Not Success to Discord
+                    // Alert to Discord only (no logging to save RAM/CPU)
+                    // แจ้งเตือนไปยัง Discord เท่านั้น (ไม่ log เพื่อประหยัด RAM/CPU)
                     if (_discordService != null)
                     {
                         await _discordService.LogBuyNotSuccessAsync(
@@ -515,7 +534,8 @@ namespace BotGridV1.Services
 
                     if (!retryBuyOrder.Success)
                     {
-                        _logger.LogError($"Buy order retry failed: {retryBuyOrder.Error?.Message}");
+                        // Alert to Discord only (no logging to save RAM/CPU)
+                        // แจ้งเตือนไปยัง Discord เท่านั้น (ไม่ log เพื่อประหยัด RAM/CPU)
                         if (_discordService != null)
                         {
                             await _discordService.LogBuyNotSuccessAsync(
@@ -597,7 +617,17 @@ namespace BotGridV1.Services
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error in CheckAndBuyAsync");
+                // Alert to Discord only (no logging to save RAM/CPU)
+                // แจ้งเตือนไปยัง Discord เท่านั้น (ไม่ log เพื่อประหยัด RAM/CPU)
+                if (_discordService != null && config != null)
+                {
+                    await _discordService.LogErrorAsync(
+                        config.DisCord_Hook1,
+                        config.DisCord_Hook2,
+                        $"Error in CheckAndBuyAsync for {config.SYMBOL}",
+                        ex.Message
+                    );
+                }
             }
         }
 
@@ -690,7 +720,8 @@ namespace BotGridV1.Services
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error in CheckAndSellAsync");
+                // Alert to Discord only (no logging to save RAM/CPU)
+                // แจ้งเตือนไปยัง Discord เท่านั้น (ไม่ log เพื่อประหยัด RAM/CPU)
                 if (_discordService != null && config != null)
                 {
                     await _discordService.LogErrorAsync(
@@ -738,7 +769,8 @@ namespace BotGridV1.Services
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error reloading order cache");
+                // No logging to save RAM/CPU (silent failure for cache reload)
+                // ไม่ log เพื่อประหยัด RAM/CPU (ล้มเหลวเงียบๆ สำหรับการ reload cache)
             }
         }
 
