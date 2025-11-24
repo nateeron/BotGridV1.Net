@@ -2,6 +2,7 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using BotGridV1.Models.SQLite;
+using BotGridV1.Services;
 using System.Text;
 using System.Text.Json;
 using System.IO;
@@ -35,6 +36,11 @@ namespace BotGridV1.Controllers
                 // Ensure database is created
                 // สร้างฐานข้อมูลถ้ายังไม่มี
                 await _context.Database.EnsureCreatedAsync();
+
+                // Seed default data from JSON file if no settings exist
+                // เติมข้อมูลตั้งต้นจากไฟล์ JSON หากยังไม่มี settings
+                var basePath = Directory.GetCurrentDirectory();
+                await DefaultDataSeeder.EnsureDefaultSettingAsync(_context, _logger, basePath);
 
                 // Check if table exists and has data
                 // ตรวจสอบว่าตารางมีอยู่และมีข้อมูลหรือไม่
@@ -712,106 +718,43 @@ namespace BotGridV1.Controllers
         }
 
         /// <summary>
-        /// Import a database backup (settings + orders) from a JSON payload.
+        /// Import a database backup (settings + orders) from an uploaded JSON file or raw JSON string.
         /// </summary>
         [HttpPost]
-        public async Task<IActionResult> BackupImport([FromBody] DatabaseImportRequest request)
+        [RequestSizeLimit(20 * 1024 * 1024)] // 20 MB
+        public async Task<IActionResult> BackupImport([FromForm] BackupImportUploadRequest request)
         {
             try
             {
-                if (request?.Backup == null)
+                if ((request.BackupFile == null || request.BackupFile.Length == 0) && string.IsNullOrWhiteSpace(request.BackupJson))
                 {
-                    return BadRequest(new { success = false, message = "Backup payload is required" });
+                    return BadRequest(new { success = false, message = "Backup file or JSON payload is required" });
                 }
 
-                await _context.Database.EnsureCreatedAsync();
+                string? jsonPayload = request.BackupJson;
 
-                using var transaction = await _context.Database.BeginTransactionAsync();
-
-                if (request.ReplaceExisting)
+                if (request.BackupFile != null && request.BackupFile.Length > 0)
                 {
-                    await _context.Database.ExecuteSqlRawAsync("DELETE FROM db_Order");
-                    await _context.Database.ExecuteSqlRawAsync("DELETE FROM db_setting");
+                    using var reader = new StreamReader(request.BackupFile.OpenReadStream(), Encoding.UTF8);
+                    jsonPayload = await reader.ReadToEndAsync();
                 }
 
-                var backupSettings = request.Backup.Settings ?? new List<DbSetting>();
-                var backupOrders = request.Backup.Orders ?? new List<DbOrder>();
-
-                var settingsToInsert = backupSettings
-                    .OrderBy(s => s.Id)
-                    .Select(s => new DbSetting
-                    {
-                        Config_Version = s.Config_Version,
-                        API_KEY = s.API_KEY,
-                        API_SECRET = s.API_SECRET,
-                        DisCord_Hook1 = s.DisCord_Hook1,
-                        DisCord_Hook2 = s.DisCord_Hook2,
-                        SYMBOL = s.SYMBOL,
-                        PERCEN_BUY = s.PERCEN_BUY,
-                        PERCEN_SELL = s.PERCEN_SELL,
-                        BuyAmountUSD = s.BuyAmountUSD
-                    })
-                    .ToList();
-
-                if (settingsToInsert.Count > 0)
+                if (string.IsNullOrWhiteSpace(jsonPayload))
                 {
-                    _context.DbSettings.AddRange(settingsToInsert);
-                    await _context.SaveChangesAsync();
+                    return BadRequest(new { success = false, message = "Backup payload is empty" });
                 }
 
-                var settingIdMap = new Dictionary<int, int>();
-                for (int i = 0; i < backupSettings.Count && i < settingsToInsert.Count; i++)
+                var backup = JsonSerializer.Deserialize<DatabaseBackupDto>(jsonPayload, new JsonSerializerOptions
                 {
-                    var originalId = backupSettings[i].Id;
-                    var newId = settingsToInsert[i].Id;
-                    settingIdMap[originalId] = newId;
-                }
-
-                var ordersToInsert = backupOrders
-                    .OrderBy(o => o.Id)
-                    .Where(o => settingIdMap.ContainsKey(o.Setting_ID))
-                    .Select(o => new DbOrder
-                    {
-                        Timestamp = o.Timestamp,
-                        OrderBuyID = o.OrderBuyID,
-                        PriceBuy = o.PriceBuy,
-                        PriceWaitSell = o.PriceWaitSell,
-                        OrderSellID = o.OrderSellID,
-                        PriceSellActual = o.PriceSellActual,
-                        ProfitLoss = o.ProfitLoss,
-                        DateBuy = o.DateBuy,
-                        DateSell = o.DateSell,
-                        Setting_ID = settingIdMap[o.Setting_ID],
-                        Status = o.Status,
-                        Symbol = o.Symbol,
-                        Quantity = o.Quantity,
-                        BuyAmountUSD = o.BuyAmountUSD,
-                        CoinQuantity = o.CoinQuantity
-                    })
-                    .ToList();
-
-                var skippedOrders = backupOrders.Count - ordersToInsert.Count;
-
-                if (ordersToInsert.Count > 0)
-                {
-                    _context.DbOrders.AddRange(ordersToInsert);
-                    await _context.SaveChangesAsync();
-                }
-
-                await transaction.CommitAsync();
-
-                return Ok(new
-                {
-                    success = true,
-                    message = "Backup imported successfully",
-                    imported = new
-                    {
-                        settings = settingsToInsert.Count,
-                        orders = ordersToInsert.Count,
-                        skippedOrders
-                    },
-                    replaceExisting = request.ReplaceExisting
+                    PropertyNameCaseInsensitive = true
                 });
+
+                if (backup == null)
+                {
+                    return BadRequest(new { success = false, message = "Unable to parse backup data" });
+                }
+
+                return await ImportBackupAsync(backup, request.ReplaceExisting);
             }
             catch (Exception ex)
             {
@@ -820,6 +763,105 @@ namespace BotGridV1.Controllers
             }
         }
 
+        private async Task<IActionResult> ImportBackupAsync(DatabaseBackupDto backup, bool replaceExisting)
+        {
+            await _context.Database.EnsureCreatedAsync();
+
+            using var transaction = await _context.Database.BeginTransactionAsync();
+
+            if (replaceExisting)
+            {
+                await _context.Database.ExecuteSqlRawAsync("DELETE FROM db_Order");
+                await _context.Database.ExecuteSqlRawAsync("DELETE FROM db_setting");
+            }
+
+            var backupSettings = backup.Settings ?? new List<DbSetting>();
+            var backupOrders = backup.Orders ?? new List<DbOrder>();
+
+            var settingsToInsert = backupSettings
+                .OrderBy(s => s.Id)
+                .Select(s => new DbSetting
+                {
+                    Config_Version = s.Config_Version,
+                    API_KEY = s.API_KEY,
+                    API_SECRET = s.API_SECRET,
+                    DisCord_Hook1 = s.DisCord_Hook1,
+                    DisCord_Hook2 = s.DisCord_Hook2,
+                    SYMBOL = s.SYMBOL,
+                    PERCEN_BUY = s.PERCEN_BUY,
+                    PERCEN_SELL = s.PERCEN_SELL,
+                    BuyAmountUSD = s.BuyAmountUSD
+                })
+                .ToList();
+
+            if (settingsToInsert.Count > 0)
+            {
+                _context.DbSettings.AddRange(settingsToInsert);
+                await _context.SaveChangesAsync();
+            }
+
+            var settingIdMap = new Dictionary<int, int>();
+            for (int i = 0; i < backupSettings.Count && i < settingsToInsert.Count; i++)
+            {
+                var originalId = backupSettings[i].Id;
+                var newId = settingsToInsert[i].Id;
+                settingIdMap[originalId] = newId;
+            }
+
+            var ordersToInsert = backupOrders
+                .OrderBy(o => o.Id)
+                .Where(o => settingIdMap.ContainsKey(o.Setting_ID))
+                .Select(o => new DbOrder
+                {
+                    Timestamp = o.Timestamp,
+                    OrderBuyID = o.OrderBuyID,
+                    PriceBuy = o.PriceBuy,
+                    PriceWaitSell = o.PriceWaitSell,
+                    OrderSellID = o.OrderSellID,
+                    PriceSellActual = o.PriceSellActual,
+                    ProfitLoss = o.ProfitLoss,
+                    DateBuy = o.DateBuy,
+                    DateSell = o.DateSell,
+                    Setting_ID = settingIdMap[o.Setting_ID],
+                    Status = o.Status,
+                    Symbol = o.Symbol,
+                    Quantity = o.Quantity,
+                    BuyAmountUSD = o.BuyAmountUSD,
+                    CoinQuantity = o.CoinQuantity
+                })
+                .ToList();
+
+            var skippedOrders = backupOrders.Count - ordersToInsert.Count;
+
+            if (ordersToInsert.Count > 0)
+            {
+                _context.DbOrders.AddRange(ordersToInsert);
+                await _context.SaveChangesAsync();
+            }
+
+            await transaction.CommitAsync();
+
+            return Ok(new
+            {
+                success = true,
+                message = "Backup imported successfully",
+                imported = new
+                {
+                    settings = settingsToInsert.Count,
+                    orders = ordersToInsert.Count,
+                    skippedOrders
+                },
+                replaceExisting
+            });
+        }
+
         #endregion
+    }
+
+    public class BackupImportUploadRequest
+    {
+        public bool ReplaceExisting { get; set; } = true;
+        public IFormFile? BackupFile { get; set; }
+        public string? BackupJson { get; set; }
     }
 }

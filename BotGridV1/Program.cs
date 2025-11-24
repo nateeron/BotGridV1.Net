@@ -39,6 +39,8 @@ builder.Services.AddHostedService(provider => provider.GetRequiredService<BotWor
 
 var app = builder.Build();
 
+await DefaultDataSeeder.EnsureSeedDataAsync(app.Services);
+
 // Configure the HTTP request pipeline.
 if (app.Environment.IsDevelopment())
 {

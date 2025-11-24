@@ -1,0 +1,12 @@
+{
+  "Config_Version": 3,
+  "API_KEY": "YcPKKIzIXkYec2bT2ecKQSrFNauM1X99WlOjCpcqxeD8leTvLOR1KsyZxDm6ZYSC",
+  "API_SECRET": "gVptG2cBQy0jyieXU0G8c3iucaj2JzFQthcPQYvNdnSwUZFQKK56WfKhwA08Gjs4",
+  "DisCord_Hook1": "https://discordapp.com/api/webhooks/1305736224878755850/SfGQMU2UDYAH6a3K41secM-VmhrID2TMwdCKJ8-XMfAG05XhK1P9fG_ltwe7RcZh4yZo",
+  "DisCord_Hook2": "",
+  "SYMBOL": "XRPUSDT",
+  "PERCEN_BUY": 0.4,
+  "PERCEN_SELL": 0.4,
+  "BuyAmountUSD": 11.2
+}
+
