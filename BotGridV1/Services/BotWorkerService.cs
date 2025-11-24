@@ -28,9 +28,9 @@ namespace BotGridV1.Services
             _logger = logger;
             _discordService = discordService;
         }
-
+        #region Start Stop
         public bool IsRunning => _isRunning;
-
+      
         public async Task<bool> StartAsync(int? configId = null)
         {
             if (_isRunning)
@@ -165,7 +165,7 @@ namespace BotGridV1.Services
                 }
             }
         }
-
+        #endregion
         private async Task ProcessPriceUpdateAsync(decimal currentPrice, DbSetting config)
         {
             try
@@ -630,6 +630,7 @@ namespace BotGridV1.Services
             }
         }
 
+        #region no
         private async Task CheckAndSellAsync(ApplicationDbContext context, DbSetting config, decimal currentPrice, List<OrderCache> waitingSellOrders)
         {
             try
@@ -816,8 +817,9 @@ namespace BotGridV1.Services
             await StopAsync();
             await base.StopAsync(cancellationToken);
         }
+        #endregion
     }
-
+    #region class
     public class OrderCache
     {
         public int Id { get; set; }
@@ -828,6 +830,7 @@ namespace BotGridV1.Services
         public string Status { get; set; } = string.Empty;
         public string? Symbol { get; set; }
     }
+    #endregion
 }
 
 

@@ -2,6 +2,9 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using BotGridV1.Models.SQLite;
+using System.Text;
+using System.Text.Json;
+using System.IO;
 
 namespace BotGridV1.Controllers
 {
@@ -42,11 +45,18 @@ namespace BotGridV1.Controllers
                 // นับจำนวนข้อมูลในตาราง
                 var settingsCount = await _context.DbSettings.CountAsync();
                 var ordersCount = await _context.DbOrders.CountAsync();
-                
+                var dataSource = _context.Database.GetDbConnection().DataSource ?? "unknown";
+                var fullPath = Path.IsPathRooted(dataSource)
+                    ? dataSource
+                    : Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, dataSource));
+
+                _logger.LogInformation("SQLite database resolved path: {DatabasePath}", fullPath);
+
                 return Ok(new
                 {
                     success = true,
                     databaseExists = true,
+                    databasePath = fullPath,
                     tables = new
                     {
                         db_setting = new
@@ -642,6 +652,172 @@ namespace BotGridV1.Controllers
         private async Task<bool> OrderExists(int id)
         {
             return await _context.DbOrders.AnyAsync(e => e.Id == id);
+        }
+
+        #endregion
+
+        #region Backup APIs
+
+        /// <summary>
+        /// Export the entire SQLite database (settings + orders) as a JSON backup file.
+        /// </summary>
+        [HttpGet]
+        public async Task<IActionResult> BackupExport([FromQuery] bool download = true)
+        {
+            try
+            {
+                await _context.Database.EnsureCreatedAsync();
+
+                var settings = await _context.DbSettings
+                    .AsNoTracking()
+                    .OrderBy(s => s.Id)
+                    .ToListAsync();
+
+                var orders = await _context.DbOrders
+                    .AsNoTracking()
+                    .OrderBy(o => o.Id)
+                    .ToListAsync();
+
+                var backup = new DatabaseBackupDto
+                {
+                    ExportedAtUtc = DateTime.UtcNow,
+                    Settings = settings,
+                    Orders = orders
+                };
+
+                if (!download)
+                {
+                    return Ok(new
+                    {
+                        success = true,
+                        message = "Backup generated successfully",
+                        counts = new { settings = settings.Count, orders = orders.Count },
+                        data = backup
+                    });
+                }
+
+                var json = JsonSerializer.Serialize(backup, new JsonSerializerOptions
+                {
+                    WriteIndented = true
+                });
+
+                var fileName = $"botgrid-backup-{DateTime.UtcNow:yyyyMMddHHmmss}.json";
+                return File(Encoding.UTF8.GetBytes(json), "application/json", fileName);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error exporting database backup");
+                return StatusCode(500, new { success = false, message = ex.Message, error = ex.ToString() });
+            }
+        }
+
+        /// <summary>
+        /// Import a database backup (settings + orders) from a JSON payload.
+        /// </summary>
+        [HttpPost]
+        public async Task<IActionResult> BackupImport([FromBody] DatabaseImportRequest request)
+        {
+            try
+            {
+                if (request?.Backup == null)
+                {
+                    return BadRequest(new { success = false, message = "Backup payload is required" });
+                }
+
+                await _context.Database.EnsureCreatedAsync();
+
+                using var transaction = await _context.Database.BeginTransactionAsync();
+
+                if (request.ReplaceExisting)
+                {
+                    await _context.Database.ExecuteSqlRawAsync("DELETE FROM db_Order");
+                    await _context.Database.ExecuteSqlRawAsync("DELETE FROM db_setting");
+                }
+
+                var backupSettings = request.Backup.Settings ?? new List<DbSetting>();
+                var backupOrders = request.Backup.Orders ?? new List<DbOrder>();
+
+                var settingsToInsert = backupSettings
+                    .OrderBy(s => s.Id)
+                    .Select(s => new DbSetting
+                    {
+                        Config_Version = s.Config_Version,
+                        API_KEY = s.API_KEY,
+                        API_SECRET = s.API_SECRET,
+                        DisCord_Hook1 = s.DisCord_Hook1,
+                        DisCord_Hook2 = s.DisCord_Hook2,
+                        SYMBOL = s.SYMBOL,
+                        PERCEN_BUY = s.PERCEN_BUY,
+                        PERCEN_SELL = s.PERCEN_SELL,
+                        BuyAmountUSD = s.BuyAmountUSD
+                    })
+                    .ToList();
+
+                if (settingsToInsert.Count > 0)
+                {
+                    _context.DbSettings.AddRange(settingsToInsert);
+                    await _context.SaveChangesAsync();
+                }
+
+                var settingIdMap = new Dictionary<int, int>();
+                for (int i = 0; i < backupSettings.Count && i < settingsToInsert.Count; i++)
+                {
+                    var originalId = backupSettings[i].Id;
+                    var newId = settingsToInsert[i].Id;
+                    settingIdMap[originalId] = newId;
+                }
+
+                var ordersToInsert = backupOrders
+                    .OrderBy(o => o.Id)
+                    .Where(o => settingIdMap.ContainsKey(o.Setting_ID))
+                    .Select(o => new DbOrder
+                    {
+                        Timestamp = o.Timestamp,
+                        OrderBuyID = o.OrderBuyID,
+                        PriceBuy = o.PriceBuy,
+                        PriceWaitSell = o.PriceWaitSell,
+                        OrderSellID = o.OrderSellID,
+                        PriceSellActual = o.PriceSellActual,
+                        ProfitLoss = o.ProfitLoss,
+                        DateBuy = o.DateBuy,
+                        DateSell = o.DateSell,
+                        Setting_ID = settingIdMap[o.Setting_ID],
+                        Status = o.Status,
+                        Symbol = o.Symbol,
+                        Quantity = o.Quantity,
+                        BuyAmountUSD = o.BuyAmountUSD,
+                        CoinQuantity = o.CoinQuantity
+                    })
+                    .ToList();
+
+                var skippedOrders = backupOrders.Count - ordersToInsert.Count;
+
+                if (ordersToInsert.Count > 0)
+                {
+                    _context.DbOrders.AddRange(ordersToInsert);
+                    await _context.SaveChangesAsync();
+                }
+
+                await transaction.CommitAsync();
+
+                return Ok(new
+                {
+                    success = true,
+                    message = "Backup imported successfully",
+                    imported = new
+                    {
+                        settings = settingsToInsert.Count,
+                        orders = ordersToInsert.Count,
+                        skippedOrders
+                    },
+                    replaceExisting = request.ReplaceExisting
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error importing database backup");
+                return StatusCode(500, new { success = false, message = ex.Message, error = ex.ToString() });
+            }
         }
 
         #endregion

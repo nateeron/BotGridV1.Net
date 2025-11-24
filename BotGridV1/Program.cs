@@ -5,6 +5,19 @@ using Microsoft.EntityFrameworkCore;
 var builder = WebApplication.CreateBuilder(args);
 
 // Add services to the container.
+builder.Services.AddCors(options =>
+{
+    options.AddPolicy("AllowReact", policy =>
+    {
+        policy.WithOrigins(
+            "http://139.180.128.104",        // React UI
+            "http://localhost:5173",         // dev
+            "http://localhost:5174"
+        )
+        .AllowAnyHeader()
+        .AllowAnyMethod();
+    });
+});
 
 builder.Services.AddControllers();
 // Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
@@ -30,7 +43,7 @@ var app = builder.Build();
 if (app.Environment.IsDevelopment())
 {
 }
-
+app.UseCors("AllowReact");
 app.UseAuthorization();
 
 app.MapControllers();
