@@ -20,6 +20,7 @@ namespace BotGridV1.Services
         private List<OrderCache> _orderCache = new List<OrderCache>();
         private DateTime _lastBuyTime = DateTime.MinValue;
         private readonly TimeSpan _minBuyInterval = TimeSpan.FromSeconds(2); // Prevent duplicate buys
+        private DateTime? _waitBuyTime = null; // เวลาที่เริ่มรอซื้อ (เมื่อไม่มี openSellOrders)
         private DbSetting? _currentConfig;
 
         public BotWorkerService(IServiceProvider serviceProvider, ILogger<BotWorkerService> logger, DiscordService? discordService = null)
@@ -144,6 +145,7 @@ namespace BotGridV1.Services
                 _socketClient = null;
                 _isRunning = false;
                 _orderCache.Clear();
+                _waitBuyTime = null; // Reset เวลารอซื้อเมื่อ bot หยุด
                 _logger.LogInformation("Bot worker stopped");
 
                 // Log to Discord
@@ -251,10 +253,31 @@ namespace BotGridV1.Services
                     // Action ล่าสุดเป็นขายแล้ว - ใช้ PriceSellActual ในการคำนวณ threshold
                     // A - (A * 2 / 100)
                     buyThreshold = lastActionOrder.PriceSellActual.Value - (lastActionOrder.PriceSellActual.Value * config.PERCEN_BUY / 100);
-                    decimal buyThresholdRunUp_Buy = lastActionOrder.PriceSellActual.Value + (lastActionOrder.PriceSellActual.Value * config.PERCEN_SELL / 100);
-                    if (currentPrice <= buyThreshold || (currentPrice >= buyThresholdRunUp_Buy && openSellOrders.Count() == 0))
+                    decimal buyThresholdRunUp_Buy = lastActionOrder.PriceSellActual.Value + (lastActionOrder.PriceSellActual.Value * config.PERCEN_BUY / 100);
+                    
+                    // ตั้งเวลาเริ่มต้นรอซื้อเมื่อไม่มี openSellOrders
+                    // Set initial wait time when there are no openSellOrders
+                    if (currentPrice < buyThresholdRunUp_Buy && openSellOrders.Count == 0 && !_waitBuyTime.HasValue)
+                    {
+                        _waitBuyTime = DateTime.UtcNow;
+                    }
+                    // Reset เวลารอซื้อเมื่อมี openSellOrders ใหม่
+                    // Reset wait time when new openSellOrders appear
+                    else if (openSellOrders.Count > 0 && _waitBuyTime.HasValue)
+                    {
+                        _waitBuyTime = null;
+                    }
+                    
+                    // ตรวจสอบว่าผ่านไป 5 นาทีแล้วหรือยัง (เมื่อไม่มี openSellOrders)
+                    // Check if 5 minutes have passed (when there are no openSellOrders)
+                    bool wait5MinutesPassed = _waitBuyTime.HasValue && 
+                        (DateTime.UtcNow - _waitBuyTime.Value) >= TimeSpan.FromMinutes(5) && 
+                        openSellOrders.Count == 0 && currentPrice < buyThresholdRunUp_Buy;
+                    
+                    if (currentPrice <= buyThreshold || (currentPrice >= buyThresholdRunUp_Buy && openSellOrders.Count == 0) || wait5MinutesPassed)
                     {
                         shouldCheckBuy = true;
+                        _waitBuyTime = null;
                     }
                 }
                 else if (!string.IsNullOrEmpty(lastActionOrder.OrderBuyID) && lastActionOrder.PriceBuy.HasValue)
@@ -408,7 +431,7 @@ namespace BotGridV1.Services
                 if (lastActionOrder != null && lastActionOrder.PriceSellActual != null)
                 {
                     decimal lastPrice = lastActionOrder.PriceSellActual.Value;
-                    buyThresholdRunUp_Buy = lastPrice + (lastPrice * config.PERCEN_SELL / 100);
+                    buyThresholdRunUp_Buy = lastPrice + (lastPrice * config.PERCEN_BUY / 100);
                 }
 
                 // Only check threshold if it was set (not null)
@@ -581,6 +604,10 @@ namespace BotGridV1.Services
 
                 context.DbOrders.Add(dbOrder);
                 await context.SaveChangesAsync();
+
+                // Reset เวลารอซื้อเมื่อซื้อสำเร็จ
+                // Reset wait buy time when buy is successful
+                _waitBuyTime = null;
 
                 // Update cache (note: _lastBuyTime was already updated before placing order)
                 // อัปเดตแคช (หมายเหตุ: _lastBuyTime ถูกอัปเดตแล้วก่อนวางคำสั่งซื้อ)
