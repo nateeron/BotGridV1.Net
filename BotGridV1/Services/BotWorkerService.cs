@@ -251,7 +251,7 @@ namespace BotGridV1.Services
                     // Action ล่าสุดเป็นขายแล้ว - ใช้ PriceSellActual ในการคำนวณ threshold
                     // A - (A * 2 / 100)
                     buyThreshold = lastActionOrder.PriceSellActual.Value - (lastActionOrder.PriceSellActual.Value * config.PERCEN_BUY / 100);
-                    decimal buyThresholdRunUp_Buy = lastActionOrder.PriceSellActual.Value + (lastActionOrder.PriceSellActual.Value * config.PERCEN_BUY / 100);
+                    decimal buyThresholdRunUp_Buy = lastActionOrder.PriceSellActual.Value + (lastActionOrder.PriceSellActual.Value * config.PERCEN_SELL / 100);
                     if (currentPrice <= buyThreshold || (currentPrice >= buyThresholdRunUp_Buy && openSellOrders.Count() == 0))
                     {
                         shouldCheckBuy = true;
@@ -408,7 +408,7 @@ namespace BotGridV1.Services
                 if (lastActionOrder != null && lastActionOrder.PriceSellActual != null)
                 {
                     decimal lastPrice = lastActionOrder.PriceSellActual.Value;
-                    buyThresholdRunUp_Buy = lastPrice + (lastPrice * config.PERCEN_BUY / 100);
+                    buyThresholdRunUp_Buy = lastPrice + (lastPrice * config.PERCEN_SELL / 100);
                 }
 
                 // Only check threshold if it was set (not null)
