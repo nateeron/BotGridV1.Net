@@ -129,5 +129,18 @@ namespace BotGridV1.Models.Binace
         public string? Error { get; set; }
         public int RetryCount { get; set; }
     }
+
+    public class req_BuyNow
+    {
+        public int? ConfigId { get; set; }
+        public decimal? BuyAmountUSD { get; set; } // Optional: override config BuyAmountUSD
+        public string? Symbol { get; set; } // Optional: override config SYMBOL
+    }
+
+    public class req_SellNow
+    {
+        public int OrderId { get; set; }
+        public int? ConfigId { get; set; } // Optional: for validation
+    }
 }
 

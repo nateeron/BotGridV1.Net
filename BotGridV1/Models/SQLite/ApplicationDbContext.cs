@@ -11,6 +11,7 @@ namespace BotGridV1.Models.SQLite
 
         public DbSet<DbSetting> DbSettings { get; set; }
         public DbSet<DbOrder> DbOrders { get; set; }
+        public DbSet<DbAlert> DbAlerts { get; set; }
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
@@ -29,6 +30,15 @@ namespace BotGridV1.Models.SQLite
                 entity.HasKey(e => e.Id);
                 entity.Property(e => e.Id).ValueGeneratedOnAdd();
                 entity.HasIndex(e => new { e.Status, e.PriceWaitSell });
+            });
+
+            modelBuilder.Entity<DbAlert>(entity =>
+            {
+                entity.ToTable("db_alert");
+                entity.HasKey(e => e.Id);
+                entity.Property(e => e.Id).ValueGeneratedOnAdd();
+                entity.HasIndex(e => new { e.Timestamp, e.IsRead });
+                entity.HasIndex(e => e.ConfigId);
             });
         }
     }
