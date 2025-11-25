@@ -6,6 +6,7 @@ using BotGridV1.Services;
 using System.Text;
 using System.Text.Json;
 using System.IO;
+using System;
 
 namespace BotGridV1.Controllers
 {
@@ -265,10 +266,13 @@ namespace BotGridV1.Controllers
             try
             {
                 await _context.Database.EnsureCreatedAsync();
+                //var ordersss = await _context.DbOrders
+                //    .OrderByDescending(o => o.Id)
+                //    .ToListAsync();
                 var orders = await _context.DbOrders
-                    .OrderByDescending(o => o.Id)
+                    .Where(o =>  (o.DateBuy != null || o.DateSell != null))
+                    .OrderByDescending(o => o.DateSell ?? o.DateBuy)
                     .ToListAsync();
-                
                 return Ok(new
                 {
                     success = true,

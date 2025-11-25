@@ -262,9 +262,15 @@ namespace BotGridV1.Services
 
                 // Get last action order (top 1 order by ID desc)
                 // รับ order action ล่าสุด (top 1 order by ID desc)
+                //var lastActionOrder_XX = await context.DbOrders
+                //    .Where(o => o.Setting_ID == config.Id)
+                //    .OrderByDescending(o => o.Id)
+                //    .FirstOrDefaultAsync();
+
                 var lastActionOrder = await context.DbOrders
-                    .Where(o => o.Setting_ID == config.Id)
-                    .OrderByDescending(o => o.Id)
+                    .Where(o => o.Setting_ID == config.Id &&
+                               (o.DateBuy != null || o.DateSell != null))
+                    .OrderByDescending(o => o.DateSell ?? o.DateBuy)
                     .FirstOrDefaultAsync();
 
                 // Get open sell orders (Status WAITING_SELL, top 20, order by PriceWaitSell asc)
@@ -415,11 +421,15 @@ namespace BotGridV1.Services
                 // ตรวจสอบเงื่อนไขการซื้ออีกครั้งโดยใช้ข้อมูลใหม่จากฐานข้อมูล
                 // This prevents race condition where multiple threads pass initial check
                 // นี่ป้องกัน race condition ที่หลาย thread ผ่านการตรวจสอบเบื้องต้น
+                //var freshLastActionOrder = await context.DbOrders
+                //    .Where(o => o.Setting_ID == config.Id)
+                //    .OrderByDescending(o => o.Id)
+                //    .FirstOrDefaultAsync();
                 var freshLastActionOrder = await context.DbOrders
-                    .Where(o => o.Setting_ID == config.Id)
-                    .OrderByDescending(o => o.Id)
+                    .Where(o => o.Setting_ID == config.Id &&
+                               (o.DateBuy != null || o.DateSell != null))
+                    .OrderByDescending(o => o.DateSell ?? o.DateBuy)
                     .FirstOrDefaultAsync();
-
                 // Check if there's a very recent order (within last 5 seconds) that might not be in cache yet
                 // ตรวจสอบว่ามี order ที่เพิ่งสร้าง (ภายใน 5 วินาทีล่าสุด) ที่อาจยังไม่อยู่ใน cache
                 var recentOrder = freshLastActionOrder != null &&
@@ -469,7 +479,7 @@ namespace BotGridV1.Services
                 }
                 decimal buyThresholdRunUp_Buy = 0;
                 // 1) คำนวณ RunUp เฉพาะเมื่อ lastActionOrder ไม่ใช่ null และ PriceSellActual != null
-                if (lastActionOrder != null && lastActionOrder.PriceSellActual != null)
+                if (lastActionOrder != null && lastActionOrder.PriceSellActual != null && openSellOrders.Count() == 0)
                 {
                     decimal lastPrice = lastActionOrder.PriceSellActual.Value;
                     buyThresholdRunUp_Buy = lastPrice + (lastPrice * config.PERCEN_BUY / 100);
