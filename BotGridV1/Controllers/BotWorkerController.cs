@@ -605,5 +605,94 @@ namespace BotGridV1.Controllers
                 });
             }
         }
+
+        /// <summary>
+        /// Manually reset the buy pause caused by insufficient USDT balance
+        /// </summary>
+        [HttpPost]
+        public IActionResult ResetBuyPause()
+        {
+            try
+            {
+                _botWorkerService.ResetBuyPauseDueToInsufficientBalance();
+
+                return Ok(new
+                {
+                    success = true,
+                    message = "Buy pause reset successfully. Bot can buy again.",
+                    isPaused = _botWorkerService.IsBuyPausedDueToInsufficientBalance
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error resetting buy pause");
+                return StatusCode(500, new
+                {
+                    success = false,
+                    message = ex.Message
+                });
+            }
+        }
+
+        /// <summary>
+        /// Set buy pause state (true = pause buying, false = resume)
+        /// </summary>
+        [HttpPost]
+        public IActionResult SetBuyPauseState([FromBody] req_SetBuyPauseState req)
+        {
+            try
+            {
+                _botWorkerService.SetBuyPauseState(req.Pause);
+
+                return Ok(new
+                {
+                    success = true,
+                    message = req.Pause ? "Buy logic paused." : "Buy logic resumed.",
+                    isPaused = _botWorkerService.IsBuyPausedDueToInsufficientBalance
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error setting buy pause state");
+                return StatusCode(500, new
+                {
+                    success = false,
+                    message = ex.Message
+                });
+            }
+        }
+
+        /// <summary>
+        /// Get the current pause status caused by insufficient balance
+        /// </summary>
+        [HttpPost]
+        public IActionResult GetBuyPauseStatus()
+        {
+            try
+            {
+                return Ok(new
+                {
+                    success = true,
+                    isPaused = _botWorkerService.IsBuyPausedDueToInsufficientBalance,
+                    message = _botWorkerService.IsBuyPausedDueToInsufficientBalance
+                        ? "Buy logic is currently paused due to insufficient balance."
+                        : "Buy logic is active."
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error getting buy pause status");
+                return StatusCode(500, new
+                {
+                    success = false,
+                    message = ex.Message
+                });
+            }
+        }
+    }
+
+    public class req_SetBuyPauseState
+    {
+        public bool Pause { get; set; }
     }
 }

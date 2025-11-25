@@ -22,6 +22,44 @@ namespace BotGridV1.Services
         private readonly TimeSpan _minBuyInterval = TimeSpan.FromSeconds(2); // Prevent duplicate buys
         private DateTime? _waitBuyTime = null; // เวลาที่เริ่มรอซื้อ (เมื่อไม่มี openSellOrders)
         private DbSetting? _currentConfig;
+        private bool _pauseBuyDueToInsufficientBalance = false; // Skip buy until a sell succeeds
+
+        public bool IsBuyPausedDueToInsufficientBalance
+        {
+            get
+            {
+                lock (_lockObject)
+                {
+                    return _pauseBuyDueToInsufficientBalance;
+                }
+            }
+        }
+
+        public void ResetBuyPauseDueToInsufficientBalance()
+        {
+            lock (_lockObject)
+            {
+                _pauseBuyDueToInsufficientBalance = false;
+            }
+            _logger.LogInformation("Buy pause due to insufficient balance has been manually reset.");
+        }
+
+        public void SetBuyPauseState(bool pause)
+        {
+            lock (_lockObject)
+            {
+                _pauseBuyDueToInsufficientBalance = pause;
+            }
+
+            if (pause)
+            {
+                _logger.LogWarning("Buy logic manually paused.");
+            }
+            else
+            {
+                _logger.LogInformation("Buy logic manually resumed.");
+            }
+        }
 
         public BotWorkerService(IServiceProvider serviceProvider, ILogger<BotWorkerService> logger, DiscordService? discordService = null)
         {
@@ -296,6 +334,13 @@ namespace BotGridV1.Services
                 // If lastActionOrder.Status == "WAITING_SELL", we don't check buy (waiting to sell)
                 // ถ้า lastActionOrder.Status == "WAITING_SELL" เราไม่ตรวจสอบการซื้อ (รอขายอยู่)
 
+                // Skip buy logic until a sell occurs if we previously paused due to low balance
+                if (_pauseBuyDueToInsufficientBalance)
+                {
+                    _logger.LogDebug("Buy logic skipped because bot is paused due to insufficient balance. Waiting for sell before resuming.");
+                    shouldCheckBuy = false;
+                }
+
                 if (shouldCheckBuy)
                 {
                     await CheckAndBuyAsync(context, config, currentPrice, lastActionOrder, openSellOrders);
@@ -488,6 +533,10 @@ namespace BotGridV1.Services
                 if (usdtBalance == null || usdtBalance.Available < buyAmountUSD)
                 {
                     _logger.LogWarning($"Insufficient USDT balance. Required: {buyAmountUSD}, Available: {usdtBalance?.Available ?? 0}");
+
+                    // Pause buy logic until next successful sell
+                    _pauseBuyDueToInsufficientBalance = true;
+
                     if (_discordService != null)
                     {
                         await _discordService.LogErrorAsync(
@@ -810,6 +859,13 @@ namespace BotGridV1.Services
                             }
 
                             _logger.LogInformation($"Sell order executed: {sellOrder.Data.Id} at {currentPrice}, Profit: {freshDbOrder.ProfitLoss}");
+
+                            // Resume buy logic after successful sell if it was paused
+                            if (_pauseBuyDueToInsufficientBalance)
+                            {
+                                _pauseBuyDueToInsufficientBalance = false;
+                                _logger.LogInformation("Buy logic resumed: A sell completed after insufficient balance pause.");
+                            }
 
                             // Log Sell Success to Discord
                             // บันทึกการขายสำเร็จไปยัง Discord
