@@ -5,6 +5,9 @@ using CryptoExchange.Net.Authentication;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Http.HttpResults;
+using System.Threading;
 
 namespace BotGridV1.Services
 {
@@ -19,7 +22,13 @@ namespace BotGridV1.Services
         private readonly object _lockObject = new object();
         private List<OrderCache> _orderCache = new List<OrderCache>();
         private DateTime _lastBuyTime = DateTime.MinValue;
+
+        private DateTime _lastSellTime = DateTime.MinValue;
+        private readonly SemaphoreSlim _sellSemaphore = new(1, 1); // Prevent overlapping sells
+
+
         private readonly TimeSpan _minBuyInterval = TimeSpan.FromSeconds(2); // Prevent duplicate buys
+        private readonly TimeSpan _minSellInterval = TimeSpan.FromSeconds(1); // Prevent duplicate sells
         private DateTime? _waitBuyTime = null; // เวลาที่เริ่มรอซื้อ (เมื่อไม่มี openSellOrders)
         private DbSetting? _currentConfig;
         private bool _pauseBuyDueToInsufficientBalance = false; // Skip buy until a sell succeeds
@@ -346,22 +355,9 @@ namespace BotGridV1.Services
                     await CheckAndBuyAsync(context, config, currentPrice, lastActionOrder, openSellOrders);
                 }
 
-                // Check if any waiting sell orders should be executed
-                // ตรวจสอบว่าควรดำเนินการคำสั่งขายที่รออยู่หรือไม่
-                // Convert openSellOrders to OrderCache for CheckAndSellAsync
-                // แปลง openSellOrders เป็น OrderCache สำหรับ CheckAndSellAsync
-                var sellOrdersToCheck = openSellOrders.Select(o => new OrderCache
-                {
-                    Id = o.Id,
-                    OrderBuyID = o.OrderBuyID,
-                    PriceBuy = o.PriceBuy,
-                    PriceWaitSell = o.PriceWaitSell ?? 0,
-                    Setting_ID = o.Setting_ID,
-                    Status = o.Status,
-                    Symbol = o.Symbol
-                }).ToList();
-
-                await CheckAndSellAsync(context, config, currentPrice, sellOrdersToCheck);
+                // Check if any waiting sell orders should be executed (one at a time)
+                // ตรวจสอบว่าควรดำเนินการคำสั่งขายที่รออยู่หรือไม่ (ครั้งละ 1 order)
+                await CheckAndSellAsync(context, config, currentPrice);
             }
             catch (Exception ex)
             {
@@ -705,218 +701,309 @@ namespace BotGridV1.Services
                 }
             }
         }
+        
+        [HttpPost]
+        public async Task Test_sellOnly()
+        {
+
+            // make data 
+
+            //await CheckAndSellAsync(context, config, currentPrice);
+
+             
+        }
 
         #region no
-        private async Task CheckAndSellAsync(ApplicationDbContext context, DbSetting config, decimal currentPrice, List<OrderCache> waitingSellOrders)
+        private async Task CheckAndSellAsync(ApplicationDbContext context, DbSetting config, decimal currentPrice)
         {
+            bool semaphoreAcquired = false;
             try
             {
-                foreach (var orderCache in waitingSellOrders)
+                semaphoreAcquired = await _sellSemaphore.WaitAsync(0);
+                if (!semaphoreAcquired)
                 {
-                    // ตรวจสอบราคาก่อนว่าถึงเป้าหมายหรือยัง
-                    // Check price first to see if target is reached
-                    if (currentPrice < orderCache.PriceWaitSell)
+                    return; // Another sell is in progress, skip to avoid duplicate processing
+                }
+
+                if (_lastSellTime != DateTime.MinValue && DateTime.UtcNow - _lastSellTime < _minSellInterval)
+                {
+                    return; // Prevent rapid consecutive sells
+                }
+
+                OrderCache? orderToSell = null;
+
+                // พยายามหยิบ order ที่ถึงเป้าจาก cache ก่อน
+                // Try to grab target order from cache first
+                lock (_lockObject)
+                {
+                    orderToSell = _orderCache
+                        .Where(o => o.Status == "WAITING_SELL" &&
+                                    o.Setting_ID == config.Id &&
+                                    currentPrice >= o.PriceWaitSell)
+                        .OrderBy(o => o.PriceWaitSell)
+                        .FirstOrDefault();
+                }
+
+                if (orderToSell == null)
+                {
+                    // ถ้าไม่เจอใน cache ให้โหลดจากฐานข้อมูล (ครั้งละ 1 order ราคาเป้าต่ำสุด)
+                    // If not found in cache, load from database (single order with lowest target)
+                    var fallbackCandidates = await context.DbOrders
+                        .Where(o => o.Setting_ID == config.Id &&
+                                    o.Status == "WAITING_SELL" &&
+                                    o.PriceWaitSell.HasValue &&
+                                    currentPrice >= o.PriceWaitSell.Value)
+                        .ToListAsync();
+
+                    var fallbackOrder = fallbackCandidates
+                        .OrderBy(o => o.PriceWaitSell)
+                        .FirstOrDefault();
+
+                    if (fallbackOrder == null)
                     {
-                        continue;
+                        return; // No orders reached target
                     }
 
-                    // ใช้ lock เพื่อป้องกัน race condition ในการขาย order เดียวกันซ้ำ
-                    // Use lock to prevent race condition when selling the same order multiple times
-                    bool shouldProcessSell = false;
+                    orderToSell = new OrderCache
+                    {
+                        Id = fallbackOrder.Id,
+                        OrderBuyID = fallbackOrder.OrderBuyID,
+                        PriceBuy = fallbackOrder.PriceBuy,
+                        PriceWaitSell = fallbackOrder.PriceWaitSell ?? 0,
+                        Setting_ID = fallbackOrder.Setting_ID,
+                        Status = fallbackOrder.Status,
+                        Symbol = fallbackOrder.Symbol
+                    };
+                }
+
+                var dbOrder = await context.DbOrders.FindAsync(orderToSell.Id);
+                if (dbOrder == null)
+                {
                     lock (_lockObject)
                     {
-                        // ตรวจสอบอีกครั้งว่า order ยังอยู่ใน cache และยังไม่ถูกขาย
-                        // Check again if order is still in cache and not yet sold
-                        var cachedOrder = _orderCache.FirstOrDefault(o => o.Id == orderCache.Id);
-                        if (cachedOrder != null && cachedOrder.Status == "WAITING_SELL")
+                        _orderCache.RemoveAll(o => o.Id == orderToSell.Id);
+                    }
+                    return;
+                }
+
+                if (dbOrder.Status != "WAITING_SELL")
+                {
+                    lock (_lockObject)
+                    {
+                        _orderCache.RemoveAll(o => o.Id == orderToSell.Id);
+                    }
+                    return;
+                }
+
+                var restClient = CreateBinanceClient(config);
+                var symbol = dbOrder.Symbol ?? config.SYMBOL!;
+                var waitingSellCount = await context.DbOrders
+                    .CountAsync(o => o.Setting_ID == config.Id && o.Status == "WAITING_SELL");
+                var isLastWaitingOrder = waitingSellCount <= 1;
+
+                // Place market sell order using coin quantity from database
+                // วางคำสั่งขายในตลาดโดยใช้จำนวน Coin จากฐานข้อมูล
+                var coinQuantityToSell = dbOrder.CoinQuantity ?? dbOrder.Quantity ?? 0;
+                if (coinQuantityToSell <= 0)
+                {
+                    if (isLastWaitingOrder)
+                    {
+                        await ForceMarkOrderAsSoldAsync(
+                            context,
+                            dbOrder,
+                            config,
+                            currentPrice,
+                            0,
+                            $"Forced close: coin quantity is zero for final order {dbOrder.Id}."
+                        );
+                    }
+                    else if (_discordService != null)
+                    {
+                        await _discordService.LogErrorAsync(
+                            config.DisCord_Hook1,
+                            config.DisCord_Hook2,
+                            $"Invalid coin quantity for order {dbOrder.Id}",
+                            $"CoinQuantity: {dbOrder.CoinQuantity}, Quantity: {dbOrder.Quantity}"
+                        );
+                    }
+                    return;
+                }
+
+                // If this is the last waiting sell order, adjust quantity to available balance
+                if (isLastWaitingOrder)
+                {
+                    var baseAsset = GetBaseAssetFromSymbol(symbol);
+                    var accountInfo = await restClient.SpotApi.Account.GetAccountInfoAsync();
+                    if (accountInfo.Success)
+                    {
+                        var baseBalance = accountInfo.Data.Balances
+                            .FirstOrDefault(b => string.Equals(b.Asset, baseAsset, StringComparison.OrdinalIgnoreCase));
+
+                        var availableBalance = baseBalance?.Available ?? 0m;
+                        if (availableBalance <= 0)
                         {
-                            shouldProcessSell = true;
+                            await ForceMarkOrderAsSoldAsync(
+                                context,
+                                dbOrder,
+                                config,
+                                currentPrice,
+                                0,
+                                $"Forced close: No {baseAsset} balance available for final order {dbOrder.Id}."
+                            );
+                            return;
+                        }
+
+                        if (availableBalance < coinQuantityToSell)
+                        {
+                            coinQuantityToSell = availableBalance;
                         }
                     }
-
-                    if (!shouldProcessSell)
+                    else if (_discordService != null)
                     {
-                        continue; // Order ถูกขายไปแล้วหรือไม่อยู่ใน cache
+                        await _discordService.LogErrorAsync(
+                            config.DisCord_Hook1,
+                            config.DisCord_Hook2,
+                            $"Failed to get account info for {symbol}",
+                            accountInfo.Error?.Message ?? "Unknown error"
+                        );
+                    }
+                }
+
+                if (coinQuantityToSell <= 0)
+                {
+                    await ForceMarkOrderAsSoldAsync(
+                        context,
+                        dbOrder,
+                        config,
+                        currentPrice,
+                        0,
+                        $"Forced close: Adjusted coin quantity is zero for order {dbOrder.Id}."
+                    );
+                    return;
+                }
+
+                var sellOrder = await restClient.SpotApi.Trading.PlaceOrderAsync(
+                    symbol: symbol,
+                    side: OrderSide.Sell,
+                    type: SpotOrderType.Market,
+                    quantity: coinQuantityToSell);
+
+                if (!sellOrder.Success)
+                {
+                    if (isLastWaitingOrder && IsQuantityTooLowError(sellOrder.Error?.Message))
+                    {
+                        var forcedOrder = await context.DbOrders.FindAsync(orderToSell.Id);
+                        if (forcedOrder != null)
+                        {
+                            await ForceMarkOrderAsSoldAsync(
+                                context,
+                                forcedOrder,
+                                config,
+                                currentPrice,
+                                coinQuantityToSell,
+                                $"Forced close: Binance rejected final sell order due to quantity constraint ({sellOrder.Error?.Message ?? "unknown reason"})."
+                            );
+                        }
+                    }
+                    else if (_discordService != null)
+                    {
+                        await _discordService.LogErrorAsync(
+                            config.DisCord_Hook1,
+                            config.DisCord_Hook2,
+                            $"Sell order failed for {symbol}",
+                            sellOrder.Error?.Message ?? "Unknown error"
+                        );
+                    }
+                    return;
+                }
+
+                var freshDbOrder = await context.DbOrders.FindAsync(orderToSell.Id);
+                if (freshDbOrder == null || freshDbOrder.Status != "WAITING_SELL")
+                {
+                    if (_discordService != null)
+                    {
+                        await _discordService.LogErrorAsync(
+                            config.DisCord_Hook1,
+                            config.DisCord_Hook2,
+                            $"Sell order conflict for {symbol}",
+                            $"Order {orderToSell.Id} was already sold. Binance Order ID: {sellOrder.Data.Id}"
+                        );
+                    }
+                    return;
+                }
+
+                try
+                {
+                    freshDbOrder.OrderSellID = sellOrder.Data.Id.ToString();
+                    freshDbOrder.PriceSellActual = currentPrice;
+                    freshDbOrder.DateSell = DateTime.UtcNow;
+                    freshDbOrder.Status = "SOLD";
+
+                    if (freshDbOrder.PriceBuy.HasValue)
+                    {
+                        freshDbOrder.ProfitLoss = currentPrice - freshDbOrder.PriceBuy.Value;
                     }
 
-                    // ดึงข้อมูล order จากฐานข้อมูลอีกครั้งเพื่อให้แน่ใจว่าเป็นข้อมูลล่าสุด
-                    // Fetch order from database again to ensure we have the latest data
-                    var dbOrder = await context.DbOrders.FindAsync(orderCache.Id);
-                    if (dbOrder == null)
+                    var saveResult = await context.SaveChangesAsync();
+
+                    if (saveResult > 0)
                     {
-                        // Order ไม่พบในฐานข้อมูล - ลบออกจาก cache
-                        // Order not found in database - remove from cache
                         lock (_lockObject)
                         {
-                            _orderCache.RemoveAll(o => o.Id == orderCache.Id);
+                            _orderCache.RemoveAll(o => o.Id == orderToSell.Id);
                         }
-                        continue;
-                    }
 
-                    // ตรวจสอบ status อีกครั้งเพื่อป้องกันการขายซ้ำ
-                    // Check status again to prevent duplicate sells
-                    if (dbOrder.Status != "WAITING_SELL")
-                    {
-                        // Order ถูกขายไปแล้ว - ลบออกจาก cache
-                        // Order already sold - remove from cache
-                        lock (_lockObject)
+                        _lastSellTime = DateTime.UtcNow;
+
+                        _logger.LogInformation($"Sell order executed: {sellOrder.Data.Id} at {currentPrice}, Profit: {freshDbOrder.ProfitLoss}");
+
+                        if (_pauseBuyDueToInsufficientBalance)
                         {
-                            _orderCache.RemoveAll(o => o.Id == orderCache.Id);
+                            _pauseBuyDueToInsufficientBalance = false;
+                            _logger.LogInformation("Buy logic resumed: A sell completed after insufficient balance pause.");
                         }
-                        continue;
+
+                        if (_discordService != null)
+                        {
+                            await _discordService.LogSellAsync(
+                                config.DisCord_Hook1,
+                                config.DisCord_Hook2,
+                                symbol,
+                                currentPrice,
+                                coinQuantityToSell,
+                                freshDbOrder.ProfitLoss,
+                                sellOrder.Data.Id.ToString()
+                            );
+                        }
                     }
-
-                    var restClient = CreateBinanceClient(config);
-                    var symbol = dbOrder.Symbol ?? config.SYMBOL!;
-
-                    // Place market sell order using coin quantity from database
-                    // วางคำสั่งขายในตลาดโดยใช้จำนวน Coin จากฐานข้อมูล
-                    var coinQuantityToSell = dbOrder.CoinQuantity ?? dbOrder.Quantity ?? 0;
-                    if (coinQuantityToSell <= 0)
+                    else
                     {
-                        // Alert to Discord only (no logging to save RAM/CPU)
-                        // แจ้งเตือนไปยัง Discord เท่านั้น (ไม่ log เพื่อประหยัด RAM/CPU)
                         if (_discordService != null)
                         {
                             await _discordService.LogErrorAsync(
                                 config.DisCord_Hook1,
                                 config.DisCord_Hook2,
-                                $"Invalid coin quantity for order {dbOrder.Id}",
-                                $"CoinQuantity: {dbOrder.CoinQuantity}, Quantity: {dbOrder.Quantity}"
+                                $"Failed to save sell order for {symbol}",
+                                $"Order {orderToSell.Id} - Binance Order ID: {sellOrder.Data.Id}, Save result: {saveResult}"
                             );
                         }
-                        continue;
                     }
-
-                    // วางคำสั่งขาย
-                    // Place sell order
-                    var sellOrder = await restClient.SpotApi.Trading.PlaceOrderAsync(
-                        symbol: symbol,
-                        side: OrderSide.Sell,
-                        type: SpotOrderType.Market,
-                        quantity: coinQuantityToSell);
-
-                    if (!sellOrder.Success)
+                }
+                catch (Exception saveEx)
+                {
+                    if (_discordService != null)
                     {
-                        // Log Sell Error to Discord
-                        // บันทึกข้อผิดพลาดการขายไปยัง Discord
-                        if (_discordService != null)
-                        {
-                            await _discordService.LogErrorAsync(
-                                config.DisCord_Hook1,
-                                config.DisCord_Hook2,
-                                $"Sell order failed for {symbol}",
-                                sellOrder.Error?.Message ?? "Unknown error"
-                            );
-                        }
-                        continue; // ข้าม order นี้และไปต่อ order ถัดไป
-                    }
-
-                    // ตรวจสอบ order อีกครั้งก่อนอัปเดตเพื่อป้องกันการขายซ้ำ
-                    // Check order again before updating to prevent duplicate sells
-                    var freshDbOrder = await context.DbOrders.FindAsync(orderCache.Id);
-                    if (freshDbOrder == null || freshDbOrder.Status != "WAITING_SELL")
-                    {
-                        // Order ถูกขายไปแล้วโดย thread อื่น - แจ้งเตือน
-                        // Order already sold by another thread - alert
-                        if (_discordService != null)
-                        {
-                            await _discordService.LogErrorAsync(
-                                config.DisCord_Hook1,
-                                config.DisCord_Hook2,
-                                $"Sell order conflict for {symbol}",
-                                $"Order {orderCache.Id} was already sold. Binance Order ID: {sellOrder.Data.Id}"
-                            );
-                        }
-                        continue;
-                    }
-
-                    // อัปเดตข้อมูล order
-                    // Update order data
-                    try
-                    {
-                        freshDbOrder.OrderSellID = sellOrder.Data.Id.ToString();
-                        freshDbOrder.PriceSellActual = currentPrice;
-                        freshDbOrder.DateSell = DateTime.UtcNow;
-                        freshDbOrder.Status = "SOLD";
-
-                        if (freshDbOrder.PriceBuy.HasValue)
-                        {
-                            freshDbOrder.ProfitLoss = currentPrice - freshDbOrder.PriceBuy.Value;
-                        }
-
-                        // บันทึกข้อมูลลงฐานข้อมูล - ตรวจสอบว่าสำเร็จหรือไม่
-                        // Save data to database - check if successful
-                        var saveResult = await context.SaveChangesAsync();
-                        
-                        if (saveResult > 0)
-                        {
-                            // บันทึกสำเร็จ - ลบออกจาก cache
-                            // Save successful - remove from cache
-                            lock (_lockObject)
-                            {
-                                _orderCache.RemoveAll(o => o.Id == orderCache.Id);
-                            }
-
-                            _logger.LogInformation($"Sell order executed: {sellOrder.Data.Id} at {currentPrice}, Profit: {freshDbOrder.ProfitLoss}");
-
-                            // Resume buy logic after successful sell if it was paused
-                            if (_pauseBuyDueToInsufficientBalance)
-                            {
-                                _pauseBuyDueToInsufficientBalance = false;
-                                _logger.LogInformation("Buy logic resumed: A sell completed after insufficient balance pause.");
-                            }
-
-                            // Log Sell Success to Discord
-                            // บันทึกการขายสำเร็จไปยัง Discord
-                            if (_discordService != null)
-                            {
-                                await _discordService.LogSellAsync(
-                                    config.DisCord_Hook1,
-                                    config.DisCord_Hook2,
-                                    symbol,
-                                    currentPrice,
-                                    coinQuantityToSell,
-                                    freshDbOrder.ProfitLoss,
-                                    sellOrder.Data.Id.ToString()
-                                );
-                            }
-                        }
-                        else
-                        {
-                            // บันทึกไม่สำเร็จ - แจ้งเตือน
-                            // Save failed - alert
-                            if (_discordService != null)
-                            {
-                                await _discordService.LogErrorAsync(
-                                    config.DisCord_Hook1,
-                                    config.DisCord_Hook2,
-                                    $"Failed to save sell order for {symbol}",
-                                    $"Order {orderCache.Id} - Binance Order ID: {sellOrder.Data.Id}, Save result: {saveResult}"
-                                );
-                            }
-                        }
-                    }
-                    catch (Exception saveEx)
-                    {
-                        // เกิดข้อผิดพลาดในการบันทึก - แจ้งเตือน
-                        // Error occurred while saving - alert
-                        if (_discordService != null)
-                        {
-                            await _discordService.LogErrorAsync(
-                                config.DisCord_Hook1,
-                                config.DisCord_Hook2,
-                                $"Error saving sell order for {symbol}",
-                                $"Order {orderCache.Id} - Binance Order ID: {sellOrder.Data.Id}, Error: {saveEx.Message}"
-                            );
-                        }
+                        await _discordService.LogErrorAsync(
+                            config.DisCord_Hook1,
+                            config.DisCord_Hook2,
+                            $"Error saving sell order for {symbol}",
+                            $"Order {orderToSell.Id} - Binance Order ID: {sellOrder.Data.Id}, Error: {saveEx.Message}"
+                        );
                     }
                 }
             }
             catch (Exception ex)
             {
-                // Alert to Discord only (no logging to save RAM/CPU)
-                // แจ้งเตือนไปยัง Discord เท่านั้น (ไม่ log เพื่อประหยัด RAM/CPU)
                 if (_discordService != null && config != null)
                 {
                     await _discordService.LogErrorAsync(
@@ -925,6 +1012,113 @@ namespace BotGridV1.Services
                         $"Error in CheckAndSellAsync for {config.SYMBOL}",
                         ex.Message
                     );
+                }
+            }
+            finally
+            {
+                if (semaphoreAcquired)
+                {
+                    _sellSemaphore.Release();
+                }
+            }
+        }
+
+        private string GetBaseAssetFromSymbol(string symbol)
+        {
+            if (string.IsNullOrWhiteSpace(symbol))
+            {
+                return symbol;
+            }
+
+            var knownQuotes = new[] { "USDT", "BUSD", "USDC", "BTC", "ETH", "BNB", "TRY", "EUR", "GBP", "AUD" };
+            foreach (var quote in knownQuotes)
+            {
+                if (symbol.EndsWith(quote, StringComparison.OrdinalIgnoreCase))
+                {
+                    return symbol.Substring(0, symbol.Length - quote.Length);
+                }
+            }
+
+            return symbol.Length > 3 ? symbol.Substring(0, symbol.Length - 3) : symbol;
+        }
+
+        private bool IsQuantityTooLowError(string? message)
+        {
+            if (string.IsNullOrEmpty(message))
+            {
+                return false;
+            }
+
+            var normalized = message.ToLowerInvariant();
+            return normalized.Contains("insufficient") ||
+                   normalized.Contains("lot size") ||
+                   normalized.Contains("notional") ||
+                   normalized.Contains("min");
+        }
+
+        private async Task ForceMarkOrderAsSoldAsync(
+            ApplicationDbContext context,
+            DbOrder order,
+            DbSetting config,
+            decimal currentPrice,
+            decimal coinQuantityUsed,
+            string reason)
+        {
+            try
+            {
+                order.PriceSellActual = currentPrice;
+                order.DateSell = DateTime.UtcNow;
+                order.Status = "SOLD";
+                order.OrderSellID ??= $"FORCED_CLOSE_{DateTimeOffset.UtcNow.ToUnixTimeSeconds()}";
+
+                if (order.PriceBuy.HasValue)
+                {
+                    order.ProfitLoss = currentPrice - order.PriceBuy.Value;
+                }
+
+                var saveResult = await context.SaveChangesAsync();
+                if (saveResult > 0)
+                {
+                    lock (_lockObject)
+                    {
+                        _orderCache.RemoveAll(o => o.Id == order.Id);
+                    }
+
+                    _lastSellTime = DateTime.UtcNow;
+
+                    if (_pauseBuyDueToInsufficientBalance)
+                    {
+                        _pauseBuyDueToInsufficientBalance = false;
+                    }
+
+                    if (_discordService != null)
+                    {
+                        await _discordService.LogSellAsync(
+                            config.DisCord_Hook1,
+                            config.DisCord_Hook2,
+                            order.Symbol ?? config.SYMBOL!,
+                            currentPrice,
+                            coinQuantityUsed,
+                            order.ProfitLoss,
+                            order.OrderSellID);
+
+                        await _discordService.LogErrorAsync(
+                            config.DisCord_Hook1,
+                            config.DisCord_Hook2,
+                            $"Forced sell completion for {order.Symbol ?? config.SYMBOL!}",
+                            reason);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                if (_discordService != null)
+                {
+                    await _discordService.LogErrorAsync(
+                        config.DisCord_Hook1,
+                        config.DisCord_Hook2,
+                        $"Error forcing sell completion for {order.Symbol ?? config.SYMBOL!}",
+                        ex.Message);
                 }
             }
         }

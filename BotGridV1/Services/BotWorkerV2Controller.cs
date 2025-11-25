@@ -11,6 +11,7 @@ using CryptoExchange.Net.Authentication;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using System;
 namespace BotGridV1.Services
 {
     public class BotWorkerV2Controller : ControllerBase
@@ -576,6 +577,22 @@ namespace BotGridV1.Services
         #endregion
 
         #region SELL Logic
+
+        [HttpPost]
+        public async Task<IActionResult> Test_sellOnly()
+        {
+
+            // make data 
+
+            //await CheckAndSellAsync(context, config, currentPrice, sellOrdersCache);
+
+            return StatusCode(500, new
+            {
+                success = false,
+                message = "",
+                status = "ERROR"
+            });
+        }
 
         private async Task CheckAndSellAsync(ApplicationDbContext context,DbSetting config,decimal currentPrice,List<OrderCache> waitingSellOrders)
         {
