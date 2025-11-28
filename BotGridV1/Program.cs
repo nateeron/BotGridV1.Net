@@ -11,8 +11,12 @@ builder.Services.AddCors(options =>
     options.AddPolicy("AllowReact", policy =>
     {
         policy.WithOrigins(
-            "http://139.180.128.104",        // React UI
-            "http://localhost:5173",         // dev
+            "http://139.180.128.104",
+            "https://139.180.128.104",
+            "https://cayoshibot.com",
+            "https://www.cayoshibot.com",
+            "https://api.cayoshibot.com",
+            "http://localhost:5173",
             "http://localhost:5174"
         )
         .AllowAnyHeader()
