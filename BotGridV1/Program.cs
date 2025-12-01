@@ -76,6 +76,7 @@ if (app.Environment.IsDevelopment())
 {
 }
 app.UseCors("AllowReact");
+app.UseAuthentication();
 app.UseAuthorization();
 
 app.MapControllers();
