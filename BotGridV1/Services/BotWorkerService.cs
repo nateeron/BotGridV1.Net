@@ -305,7 +305,7 @@ namespace BotGridV1.Services
                     // Last action is Sold - use PriceSellActual for threshold calculation
                     // Action ล่าสุดเป็นขายแล้ว - ใช้ PriceSellActual ในการคำนวณ threshold
                     // A - (A * 2 / 100)
-                    buyThreshold = lastActionOrder.PriceSellActual.Value - (lastActionOrder.PriceSellActual.Value * config.PERCEN_BUY / 100);
+                    buyThreshold = lastActionOrder.PriceSellActual.Value - (lastActionOrder.PriceSellActual.Value * config.PERCEN_SELL / 100);
                     decimal buyThresholdRunUp_Buy = lastActionOrder.PriceSellActual.Value + (lastActionOrder.PriceSellActual.Value * config.PERCEN_BUY / 100);
                     
                     // ตั้งเวลาเริ่มต้นรอซื้อเมื่อไม่มี openSellOrders
