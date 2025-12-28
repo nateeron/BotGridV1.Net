@@ -951,7 +951,8 @@ namespace BotGridV1.Services
 
                     if (freshDbOrder.PriceBuy.HasValue)
                     {
-                        freshDbOrder.ProfitLoss = currentPrice - freshDbOrder.PriceBuy.Value;
+                        // ProfitLoss_USDT = (PriceSellActual - PriceBuy) × CoinQuantity
+                        freshDbOrder.ProfitLoss = (currentPrice - freshDbOrder.PriceBuy.Value) * coinQuantityToSell;
                     }
 
                     var saveResult = await context.SaveChangesAsync();
@@ -1083,7 +1084,10 @@ namespace BotGridV1.Services
 
                 if (order.PriceBuy.HasValue)
                 {
-                    order.ProfitLoss = currentPrice - order.PriceBuy.Value;
+                    // ProfitLoss_USDT = (PriceSellActual - PriceBuy) × CoinQuantity
+                    // Use coinQuantityUsed if > 0, otherwise use order's CoinQuantity
+                    var quantity = coinQuantityUsed > 0 ? coinQuantityUsed : (order.CoinQuantity ?? order.Quantity ?? 0);
+                    order.ProfitLoss = (currentPrice - order.PriceBuy.Value) * quantity;
                 }
 
                 var saveResult = await context.SaveChangesAsync();

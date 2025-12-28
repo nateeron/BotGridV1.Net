@@ -1,7 +1,11 @@
+using BotGridV1.Models.Login;
 using BotGridV1.Models.SQLite;
 using BotGridV1.Services;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
+using Microsoft.IdentityModel.Tokens;
+using System.Text;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -58,6 +62,33 @@ builder.Services.AddSingleton<DiscordService>(serviceProvider =>
     return new DiscordService(httpClient, logger, alertLogService);
 });
 
+// Register CurrencyService
+builder.Services.AddHttpClient<CurrencyService>((serviceProvider, client) =>
+{
+    // HttpClient is configured by AddHttpClient, logger will be injected
+});
+builder.Services.AddScoped<CurrencyService>();
+
+// Register JwtService
+builder.Services.AddScoped<JwtService>();
+
+builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+.AddJwtBearer(options =>
+{
+    options.TokenValidationParameters = new TokenValidationParameters
+    {
+        ValidateIssuer = true,
+        ValidateAudience = true,
+        ValidateLifetime = true,
+        ValidateIssuerSigningKey = true,
+        ValidIssuer = builder.Configuration["Jwt:Issuer"],
+        ValidAudience = builder.Configuration["Jwt:Audience"],
+        IssuerSigningKey = new SymmetricSecurityKey(
+            Encoding.UTF8.GetBytes(builder.Configuration["Jwt:Key"])
+        )
+    };
+});
+
 // Register BotWorkerService as a hosted service
 builder.Services.AddSingleton<BotWorkerService>();
 builder.Services.AddHostedService(provider => provider.GetRequiredService<BotWorkerService>());
@@ -71,11 +102,15 @@ loggerFactory.AddProvider(new AlertLoggerProvider(alertLogService, LogLevel.Warn
 
 await DefaultDataSeeder.EnsureSeedDataAsync(app.Services);
 
+// Initialize UserLogin tables
+await UserLoginTableInitializer.EnsureUserLoginTablesAsync(app.Services);
+
 // Configure the HTTP request pipeline.
 if (app.Environment.IsDevelopment())
 {
 }
 app.UseCors("AllowReact");
+app.UseAuthentication();
 app.UseAuthorization();
 
 app.MapControllers();

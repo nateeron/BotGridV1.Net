@@ -11,7 +11,7 @@ namespace BotGridV1.Controllers
         [HttpGet("/")]
         public async Task<IActionResult> Run()
         {
-            return Ok("Ok Run .Net C# v.8.0");
+            return Ok("Ok Run .Net C# v.8.1");
         }
     }
 }

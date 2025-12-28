@@ -288,6 +288,82 @@ namespace BotGridV1.Controllers
         }
 
         /// <summary>
+        /// Get orders by page with filtering
+        /// ดึงข้อมูล Order แบบแบ่งหน้า พร้อมการกรอง
+        /// </summary>
+        [HttpPost]
+        public async Task<IActionResult> GetOrdersByPage(req_GetOrdersByPage req)
+        {
+            try
+            {
+                await _context.Database.EnsureCreatedAsync();
+
+                // Validate input
+                if (req.page < 1) req.page = 1;
+                if (req.pageSize < 1) req.pageSize = 50;
+                if (req.pageSize > 1000) req.pageSize = 1000; // Limit max page size
+
+                // Build query - start with orders that have DateBuy or DateSell
+                var query = _context.DbOrders
+                    .Where(o => (o.DateBuy != null || o.DateSell != null));
+
+                // Apply filter based on Status
+                var filterUpper = !string.IsNullOrEmpty(req.filter) ? req.filter.ToUpper() : "ALL";
+                if (filterUpper != "ALL")
+                {
+                    if (filterUpper == "WAITING_SELL")
+                    {
+                        query = query.Where(o => o.Status == "WAITING_SELL");
+                    }
+                    else if (filterUpper == "SOLD")
+                    {
+                        query = query.Where(o => o.Status == "SOLD");
+                    }
+                }
+
+                // Get total count before pagination
+                var total = await query.CountAsync();
+
+                // Apply ordering based on filter status
+                IQueryable<DbOrder> orderedQuery;
+                if (filterUpper == "WAITING_SELL")
+                {
+                    // Sort by DateBuy descending for WAITING_SELL
+                    orderedQuery = query.OrderByDescending(o => o.DateBuy);
+                }
+                else if (filterUpper == "SOLD")
+                {
+                    // Sort by DateSell descending for SOLD
+                    orderedQuery = query.OrderByDescending(o => o.DateSell);
+                }
+                else
+                {
+                    // For "All", use DateSell ?? DateBuy descending
+                    orderedQuery = query.OrderByDescending(o => o.DateSell ?? o.DateBuy);
+                }
+
+                // Apply pagination
+                var orders = await orderedQuery
+                    .Skip((req.page - 1) * req.pageSize)
+                    .Take(req.pageSize)
+                    .ToListAsync();
+
+                return Ok(new
+                {
+                    page = req.page,
+                    pageSize = req.pageSize,
+                    total = total,
+                    data = orders
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error getting orders by page");
+                return StatusCode(500, new { success = false, message = ex.Message });
+            }
+        }
+
+        /// <summary>
         /// Get orders by Setting ID
         /// ดึงข้อมูล Order ตาม Setting ID
         /// </summary>
@@ -664,6 +740,87 @@ namespace BotGridV1.Controllers
             return await _context.DbOrders.AnyAsync(e => e.Id == id);
         }
 
+        /// <summary>
+        /// Recalculate and update ProfitLoss for all SOLD orders
+        /// คำนวณและอัปเดต ProfitLoss สำหรับ order ที่มี Status = "SOLD"
+        /// New formula: ProfitLoss_USDT = (PriceSellActual - PriceBuy) × CoinQuantity
+        /// </summary>
+        [HttpPost]
+        public async Task<IActionResult> RecalculateProfitLossForSoldOrders()
+        {
+            try
+            {
+                await _context.Database.EnsureCreatedAsync();
+
+                // Get all orders with Status = "SOLD"
+                var soldOrders = await _context.DbOrders
+                    .Where(o => o.Status == "SOLD")
+                    .ToListAsync();
+
+                if (soldOrders.Count == 0)
+                {
+                    return Ok(new
+                    {
+                        success = true,
+                        message = "No SOLD orders found to update",
+                        updatedCount = 0,
+                        skippedCount = 0
+                    });
+                }
+
+                int updatedCount = 0;
+                int skippedCount = 0;
+
+                foreach (var order in soldOrders)
+                {
+                    // Skip if required fields are missing
+                    if (!order.PriceBuy.HasValue || !order.PriceSellActual.HasValue)
+                    {
+                        skippedCount++;
+                        continue;
+                    }
+
+                    // Get CoinQuantity (prefer CoinQuantity, fallback to Quantity)
+                    var coinQuantity = order.CoinQuantity ?? order.Quantity ?? 0;
+
+                    if (coinQuantity <= 0)
+                    {
+                        skippedCount++;
+                        continue;
+                    }
+
+                    // Calculate new ProfitLoss: (PriceSellActual - PriceBuy) × CoinQuantity
+                    var newProfitLoss = (order.PriceSellActual.Value - order.PriceBuy.Value) * coinQuantity;
+
+                    // Update ProfitLoss
+                    order.ProfitLoss = newProfitLoss;
+                    updatedCount++;
+                }
+
+                // Save all changes
+                await _context.SaveChangesAsync();
+
+                return Ok(new
+                {
+                    success = true,
+                    message = $"Successfully recalculated ProfitLoss for {updatedCount} order(s)",
+                    updatedCount = updatedCount,
+                    skippedCount = skippedCount,
+                    totalSoldOrders = soldOrders.Count
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error recalculating ProfitLoss for SOLD orders");
+                return StatusCode(500, new
+                {
+                    success = false,
+                    message = ex.Message,
+                    error = ex.ToString()
+                });
+            }
+        }
+
         #endregion
 
         #region Backup APIs
@@ -857,6 +1014,195 @@ namespace BotGridV1.Controllers
                 },
                 replaceExisting
             });
+        }
+
+        #endregion
+
+        #region UserLogin Tables
+
+        /// <summary>
+        /// Check if UserLogin tables exist, create them if they don't
+        /// ตรวจสอบว่าตาราง UserLogin มีอยู่หรือไม่ สร้างถ้ายังไม่มี
+        /// </summary>
+        [HttpPost]
+        public async Task<IActionResult> CheckAndCreateUserLoginTables()
+        {
+            try
+            {
+                await _context.Database.EnsureCreatedAsync();
+
+                var connection = _context.Database.GetDbConnection();
+                if (connection.State != System.Data.ConnectionState.Open)
+                {
+                    await connection.OpenAsync();
+                }
+
+                var createdTables = new List<string>();
+                var existingTables = new List<string>();
+
+                try
+                {
+                    // Check which tables exist
+                    using (var checkCommand = connection.CreateCommand())
+                    {
+                        checkCommand.CommandText = "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('Users', 'Roles', 'UserRoles', 'UserRefreshTokens', 'UserLoginLogs')";
+                        using (var reader = await checkCommand.ExecuteReaderAsync())
+                        {
+                            while (await reader.ReadAsync())
+                            {
+                                existingTables.Add(reader.GetString(0));
+                            }
+                        }
+                    }
+
+                    // Create Users table if it doesn't exist
+                    if (!existingTables.Contains("Users"))
+                    {
+                        using (var command = connection.CreateCommand())
+                        {
+                            command.CommandText = @"
+                                CREATE TABLE Users (
+                                    UserID              INTEGER PRIMARY KEY AUTOINCREMENT,
+                                    Username            TEXT NOT NULL UNIQUE,
+                                    Email               TEXT NULL UNIQUE,
+                                    PasswordHash        TEXT NOT NULL,
+                                    PasswordSalt        TEXT NOT NULL,
+                                    FullName            TEXT NULL,
+                                    PhoneNumber         TEXT NULL,
+                                    IsActive            INTEGER NOT NULL DEFAULT 1,
+                                    IsLocked            INTEGER NOT NULL DEFAULT 0,
+                                    FailedLoginCount    INTEGER NOT NULL DEFAULT 0,
+                                    LastLoginAt         TEXT NULL,
+                                    CreatedAt           TEXT NOT NULL DEFAULT (datetime('now')),
+                                    UpdatedAt           TEXT NULL
+                                )";
+                            await command.ExecuteNonQueryAsync();
+                            createdTables.Add("Users");
+                        }
+                    }
+
+                    // Create Roles table if it doesn't exist
+                    if (!existingTables.Contains("Roles"))
+                    {
+                        using (var command = connection.CreateCommand())
+                        {
+                            command.CommandText = @"
+                                CREATE TABLE Roles (
+                                    RoleID      INTEGER PRIMARY KEY AUTOINCREMENT,
+                                    RoleCode    TEXT NOT NULL UNIQUE,
+                                    RoleName    TEXT NOT NULL,
+                                    IsActive    INTEGER NOT NULL DEFAULT 1
+                                )";
+                            await command.ExecuteNonQueryAsync();
+                            createdTables.Add("Roles");
+                        }
+                    }
+
+                    // Create UserRoles table if it doesn't exist
+                    if (!existingTables.Contains("UserRoles"))
+                    {
+                        using (var command = connection.CreateCommand())
+                        {
+                            command.CommandText = @"
+                                CREATE TABLE UserRoles (
+                                    UserRoleID  INTEGER PRIMARY KEY AUTOINCREMENT,
+                                    UserID      INTEGER NOT NULL,
+                                    RoleID      INTEGER NOT NULL,
+                                    FOREIGN KEY (UserID) REFERENCES Users(UserID),
+                                    FOREIGN KEY (RoleID) REFERENCES Roles(RoleID),
+                                    UNIQUE(UserID, RoleID)
+                                )";
+                            await command.ExecuteNonQueryAsync();
+                            createdTables.Add("UserRoles");
+                        }
+                    }
+
+                    // Create UserRefreshTokens table if it doesn't exist
+                    if (!existingTables.Contains("UserRefreshTokens"))
+                    {
+                        using (var command = connection.CreateCommand())
+                        {
+                            command.CommandText = @"
+                                CREATE TABLE UserRefreshTokens (
+                                    TokenID         INTEGER PRIMARY KEY AUTOINCREMENT,
+                                    UserID          INTEGER NOT NULL,
+                                    RefreshToken    TEXT NOT NULL,
+                                    ExpiredAt       TEXT NOT NULL,
+                                    IsRevoked       INTEGER NOT NULL DEFAULT 0,
+                                    CreatedAt       TEXT NOT NULL DEFAULT (datetime('now')),
+                                    FOREIGN KEY (UserID) REFERENCES Users(UserID)
+                                )";
+                            await command.ExecuteNonQueryAsync();
+                            createdTables.Add("UserRefreshTokens");
+                        }
+                    }
+
+                    // Create UserLoginLogs table if it doesn't exist
+                    if (!existingTables.Contains("UserLoginLogs"))
+                    {
+                        using (var command = connection.CreateCommand())
+                        {
+                            command.CommandText = @"
+                                CREATE TABLE UserLoginLogs (
+                                    LogID       INTEGER PRIMARY KEY AUTOINCREMENT,
+                                    UserID      INTEGER NULL,
+                                    Username    TEXT NULL,
+                                    LoginAt     TEXT NOT NULL DEFAULT (datetime('now')),
+                                    IPAddress   TEXT NULL,
+                                    UserAgent   TEXT NULL,
+                                    IsSuccess   INTEGER NOT NULL,
+                                    FailReason  TEXT NULL,
+                                    FOREIGN KEY (UserID) REFERENCES Users(UserID)
+                                )";
+                            await command.ExecuteNonQueryAsync();
+                            createdTables.Add("UserLoginLogs");
+                        }
+                    }
+
+                    // Verify all tables exist now
+                    var allTables = new List<string>();
+                    using (var verifyCommand = connection.CreateCommand())
+                    {
+                        verifyCommand.CommandText = "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('Users', 'Roles', 'UserRoles', 'UserRefreshTokens', 'UserLoginLogs') ORDER BY name";
+                        using (var reader = await verifyCommand.ExecuteReaderAsync())
+                        {
+                            while (await reader.ReadAsync())
+                            {
+                                allTables.Add(reader.GetString(0));
+                            }
+                        }
+                    }
+
+                    return Ok(new
+                    {
+                        success = true,
+                        message = createdTables.Count > 0
+                            ? $"Created {createdTables.Count} table(s): {string.Join(", ", createdTables)}"
+                            : "All UserLogin tables already exist",
+                        createdTables = createdTables,
+                        existingTables = existingTables,
+                        allTables = allTables,
+                        totalTables = allTables.Count
+                    });
+                }
+                finally
+                {
+                    if (connection.State == System.Data.ConnectionState.Open)
+                    {
+                        await connection.CloseAsync();
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error checking/creating UserLogin tables");
+                return StatusCode(500, new
+                {
+                    success = false,
+                    message = ex.Message,
+                    error = ex.ToString()
+                });
+            }
         }
 
         #endregion

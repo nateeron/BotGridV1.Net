@@ -63,5 +63,12 @@ namespace BotGridV1.Models.SQLite
         public string Status { get; set; } = string.Empty;
         public int? SettingId { get; set; }
     }
+
+    public class req_GetOrdersByPage
+    {
+        public int page { get; set; } = 1;
+        public int pageSize { get; set; } = 50;
+        public string filter { get; set; } = "All"; // All, WAITING_SELL, SOLD
+    }
 }
 
