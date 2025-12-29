@@ -115,9 +115,6 @@ namespace BotGridV1.Controllers
             }
         }
 
-       
-
-
         /// <summary>
         /// Get setting by ID
         /// </summary>
@@ -1082,6 +1079,7 @@ namespace BotGridV1.Controllers
                     }
 
                     // Create Roles table if it doesn't exist
+                    bool rolesTableCreated = false;
                     if (!existingTables.Contains("Roles"))
                     {
                         using (var command = connection.CreateCommand())
@@ -1095,6 +1093,43 @@ namespace BotGridV1.Controllers
                                 )";
                             await command.ExecuteNonQueryAsync();
                             createdTables.Add("Roles");
+                            rolesTableCreated = true;
+                        }
+                    }
+
+                    // Insert default roles if Roles table was just created or is empty
+                    bool shouldInsertDefaultRoles = false;
+                    if (rolesTableCreated)
+                    {
+                        // Table was just created, insert default roles
+                        shouldInsertDefaultRoles = true;
+                    }
+                    else
+                    {
+                        // Check if Roles table is empty
+                        using (var checkCommand = connection.CreateCommand())
+                        {
+                            checkCommand.CommandText = "SELECT COUNT(*) FROM Roles";
+                            var roleCount = Convert.ToInt32(await checkCommand.ExecuteScalarAsync());
+                            if (roleCount == 0)
+                            {
+                                shouldInsertDefaultRoles = true;
+                            }
+                        }
+                    }
+
+                    if (shouldInsertDefaultRoles)
+                    {
+                        using (var insertCommand = connection.CreateCommand())
+                        {
+                            insertCommand.CommandText = @"
+                                INSERT INTO Roles (RoleCode, RoleName, IsActive)
+                                VALUES
+                                    ('ADMIN', 'Administrator', 1),
+                                    ('TRADER', 'Trader', 1),
+                                    ('BOT_ADMIN', 'Bot Administrator', 1),
+                                    ('VIEWER', 'Read Only', 1)";
+                            await insertCommand.ExecuteNonQueryAsync();
                         }
                     }
 
