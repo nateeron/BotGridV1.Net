@@ -305,7 +305,15 @@ namespace BotGridV1.Services
                     // Last action is Sold - use PriceSellActual for threshold calculation
                     // Action ล่าสุดเป็นขายแล้ว - ใช้ PriceSellActual ในการคำนวณ threshold
                     // A - (A * 2 / 100)
-                    buyThreshold = lastActionOrder.PriceSellActual.Value - (lastActionOrder.PriceSellActual.Value * config.PERCEN_BUY / 100);
+                    // *****************************************
+                    // **
+                    // **
+                    // **  ต้องหาจุดซื้่อขาย
+                    // **
+                    // **
+                    // *****************************************
+                    buyThreshold = await CheckBuy_SOLD(context, config, lastActionOrder.PriceSellActual.Value);
+                   // buyThreshold = lastActionOrder.PriceSellActual.Value - (lastActionOrder.PriceSellActual.Value * config.PERCEN_BUY / 100);
                     decimal buyThresholdRunUp_Buy = lastActionOrder.PriceSellActual.Value + (lastActionOrder.PriceSellActual.Value * config.PERCEN_BUY / 100);
                     
                     // ตั้งเวลาเริ่มต้นรอซื้อเมื่อไม่มี openSellOrders
@@ -461,8 +469,15 @@ namespace BotGridV1.Services
                 {
                     // Last action is Sold - use PriceSellActual
                     // Action ล่าสุดเป็นขายแล้ว - ใช้ PriceSellActual
-
-                    threshold = freshLastActionOrder.PriceSellActual.Value - (freshLastActionOrder.PriceSellActual.Value * config.PERCEN_BUY / 100);
+                    // *****************************************
+                    // **
+                    // **
+                    // **  ต้องหาจุดซื้่อขาย
+                    // **
+                    // **
+                    // *****************************************
+                    threshold = await CheckBuy_SOLD(context, config, freshLastActionOrder.PriceSellActual.Value);
+                    //threshold = freshLastActionOrder.PriceSellActual.Value - (freshLastActionOrder.PriceSellActual.Value * config.PERCEN_BUY / 100);
                 }
                 else if (!string.IsNullOrEmpty(freshLastActionOrder.OrderBuyID) && freshLastActionOrder.PriceBuy.HasValue)
                 {
@@ -1034,6 +1049,60 @@ namespace BotGridV1.Services
             }
         }
 
+        // หาจุดกุงกลางจุดขาย
+        private async Task<decimal?> CheckBuy_SOLD(ApplicationDbContext context, DbSetting config, decimal lastActionSOLD)
+        {
+            decimal NexbuyDefaul = lastActionSOLD - (lastActionSOLD * config.PERCEN_BUY / 100);
+            decimal future_Sell = NexbuyDefaul + (NexbuyDefaul / 100 * config.PERCEN_SELL);
+            
+            // -------------------------
+            // BottomPriceSell (< LastActionSOLD)
+            // -------------------------
+            decimal? bottomPriceSell = await context.DbOrders
+                .Where(o =>
+                    o.Setting_ID == config.Id &&
+                    o.Status == "SOLD" &&
+                    o.PriceSellActual < lastActionSOLD)
+                .OrderByDescending(o => o.DateSell)
+                .Select(o => o.PriceSellActual)
+                .FirstOrDefaultAsync();
+
+            // -------------------------
+            // TopPriceSell (> LastActionSOLD)
+            // -------------------------
+            decimal? topPriceSell = await context.DbOrders
+                .Where(o =>
+                    o.Setting_ID == config.Id &&
+                    o.Status == "SOLD" &&
+                    o.PriceSellActual > lastActionSOLD)
+                .OrderBy(o => o.DateSell)
+                .Select(o => o.PriceSellActual)
+                .FirstOrDefaultAsync();
+
+            // -------------------------
+            // Validate data
+            // -------------------------
+            if (!bottomPriceSell.HasValue || !topPriceSell.HasValue)
+                return null;
+
+            // -------------------------
+            // Calculate sell_between
+            // -------------------------
+            decimal sellBetween = bottomPriceSell.Value+((topPriceSell.Value - bottomPriceSell.Value) / 2m);
+
+            // -------------------------
+            // 0.2% threshold เปอร์เซ็นต์ (%) = ((topPriceSell.Value - sellBetween ) / sellBetween) * 100;
+            // -------------------------
+            decimal percent02 = ((topPriceSell.Value - sellBetween ) / sellBetween) * 100;
+            decimal? NexBuy_Final =null;
+            if (percent02 >= 0.1805m)
+            {
+                NexBuy_Final = sellBetween - (sellBetween * config.PERCEN_SELL / 100);
+            }
+
+            return NexBuy_Final;
+        }
+       
         private string GetBaseAssetFromSymbol(string symbol)
         {
             if (string.IsNullOrWhiteSpace(symbol))
@@ -1234,6 +1303,9 @@ namespace BotGridV1.Services
         public string? Symbol { get; set; }
     }
     #endregion
+
+
+
 }
 
 
