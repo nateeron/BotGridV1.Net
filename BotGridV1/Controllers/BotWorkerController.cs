@@ -690,6 +690,37 @@ namespace BotGridV1.Controllers
                 });
             }
         }
+
+        /// <summary>
+        /// Get the current next buy price threshold calculated by ProcessPriceUpdateAsync
+        /// </summary>
+        [HttpPost]
+        public IActionResult GetNextBuyPrice()
+        {
+            try
+            {
+                var buyThreshold = _botWorkerService.CurrentBuyThreshold;
+
+                return Ok(new
+                {
+                    success = true,
+                    nextBuyPrice = buyThreshold,
+                    hasThreshold = buyThreshold.HasValue,
+                    message = buyThreshold.HasValue
+                        ? $"Next buy price threshold: {buyThreshold.Value}"
+                        : "No buy threshold calculated yet. Bot may buy immediately if no orders exist."
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error getting next buy price");
+                return StatusCode(500, new
+                {
+                    success = false,
+                    message = ex.Message
+                });
+            }
+        }
     }
 
     public class req_SetBuyPauseState
