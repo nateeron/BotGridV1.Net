@@ -34,6 +34,9 @@ namespace BotGridV1.Services
         private DbSetting? _currentConfig;
         private bool _pauseBuyDueToInsufficientBalance = false; // Skip buy until a sell succeeds
         private decimal? _currentBuyThreshold = null; // Current buy threshold calculated in ProcessPriceUpdateAsync
+        private decimal? _isSold_Price = null;
+
+
 
         public bool IsBuyPausedDueToInsufficientBalance
         {
@@ -56,7 +59,16 @@ namespace BotGridV1.Services
                 }
             }
         }
-
+        public decimal? Pa_isSold_Price
+        {
+            get
+            {
+                lock (_lockObject)
+                {
+                    return _isSold_Price;
+                }
+            }
+        }
         public void ResetBuyPauseDueToInsufficientBalance()
         {
             lock (_lockObject)
@@ -91,7 +103,7 @@ namespace BotGridV1.Services
         }
         #region Start Stop
         public bool IsRunning => _isRunning;
-      
+
         public async Task<bool> StartAsync(int? configId = null)
         {
             if (_isRunning)
@@ -335,15 +347,15 @@ namespace BotGridV1.Services
                     // **
                     // *****************************************
                     buyThreshold = await CheckBuy_SOLD(context, config, lastActionOrder.PriceSellActual.Value);
-                   // buyThreshold = lastActionOrder.PriceSellActual.Value - (lastActionOrder.PriceSellActual.Value * config.PERCEN_BUY / 100);
+                    // buyThreshold = lastActionOrder.PriceSellActual.Value - (lastActionOrder.PriceSellActual.Value * config.PERCEN_BUY / 100);
                     decimal buyThresholdRunUp_Buy = lastActionOrder.PriceSellActual.Value + (lastActionOrder.PriceSellActual.Value * config.PERCEN_BUY / 100);
-                    
+
                     // Store buyThreshold for API access
                     lock (_lockObject)
                     {
                         _currentBuyThreshold = buyThreshold;
                     }
-                    
+
                     // ตั้งเวลาเริ่มต้นรอซื้อเมื่อไม่มี openSellOrders
                     // Set initial wait time when there are no openSellOrders
                     if (currentPrice < buyThresholdRunUp_Buy && openSellOrders.Count == 0 && !_waitBuyTime.HasValue)
@@ -356,13 +368,13 @@ namespace BotGridV1.Services
                     {
                         _waitBuyTime = null;
                     }
-                    
+
                     // ตรวจสอบว่าผ่านไป 5 นาทีแล้วหรือยัง (เมื่อไม่มี openSellOrders)
                     // Check if 5 minutes have passed (when there are no openSellOrders)
-                    bool wait5MinutesPassed = _waitBuyTime.HasValue && 
-                        (DateTime.UtcNow - _waitBuyTime.Value) >= TimeSpan.FromMinutes(5) && 
+                    bool wait5MinutesPassed = _waitBuyTime.HasValue &&
+                        (DateTime.UtcNow - _waitBuyTime.Value) >= TimeSpan.FromMinutes(5) &&
                         openSellOrders.Count == 0 && currentPrice < buyThresholdRunUp_Buy;
-                    
+
                     if (currentPrice <= buyThreshold || (currentPrice >= buyThresholdRunUp_Buy && openSellOrders.Count == 0) || wait5MinutesPassed)
                     {
                         shouldCheckBuy = true;
@@ -1096,6 +1108,7 @@ namespace BotGridV1.Services
         {
             decimal? NexbuyDefaul = lastActionSOLD - (lastActionSOLD * config.PERCEN_BUY / 100);
             decimal? future_Sell = NexbuyDefaul + (NexbuyDefaul / 100 * config.PERCEN_SELL);
+            decimal? NexBuy_Final = null;
 
             // -------------------------
             // BottomPriceSell (< LastActionSOLD)
@@ -1112,52 +1125,65 @@ namespace BotGridV1.Services
             // -- * 1.892
             // --TOP > ASC = 1.895323
             // -------------------------
-            decimal? topPriceSell =  context.DbOrders
-                .Where(o =>
-                    o.Setting_ID == config.Id &&
-                    o.Status == "WAITING_SELL" &&
-                    o.PriceWaitSell.HasValue &&
-                    o.PriceWaitSell > future_Sell)
-                .AsEnumerable()                  // 🔥 สำคัญมาก
-                .OrderBy(o => o.PriceWaitSell)
-                .Select(o => o.PriceWaitSell)
-                .FirstOrDefault();
-
-            // -------------------------
-            // TopPriceSell (> LastActionSOLD)
-            // -------------------------
-            decimal? bottomPriceSell =  context.DbOrders
-                .Where(o =>
-                    o.Setting_ID == config.Id &&
-                    o.Status == "WAITING_SELL" &&
-                    o.PriceWaitSell.HasValue &&
-                    o.PriceWaitSell < future_Sell)
-                .AsEnumerable()
-                 .OrderByDescending(o => o.PriceWaitSell)
-                .Select(o => o.PriceWaitSell)
-                .FirstOrDefault();
-
-            // -------------------------
-            // Validate data
-            // -------------------------
-            if (!bottomPriceSell.HasValue || !topPriceSell.HasValue)
-                return null;
-            decimal? scale = 0.1m;
-
-            // -------------------------
-            // Calculate sell_between
-            // -------------------------
-            decimal? sellBetween = bottomPriceSell.Value+((topPriceSell.Value - bottomPriceSell.Value) / 2m);
-
-            // -------------------------
-            // 0.2% threshold เปอร์เซ็นต์ (%) = ((topPriceSell.Value - sellBetween ) / sellBetween) * 100;
-            // -------------------------
-            decimal? percent02 = ((topPriceSell.Value - sellBetween ) / sellBetween) * 100;
-            decimal? NexBuy_Final =null;
-            if (percent02 >= scale)
+            while (true)
             {
-                decimal? NexBuy_ = topPriceSell.Value * 0.999m;
-                NexBuy_Final = NexBuy_ - (NexBuy_ * config.PERCEN_SELL / 100);
+                if(_isSold_Price != null)
+                {
+                    future_Sell = _isSold_Price;
+                }
+                decimal? topPriceSell = context.DbOrders
+                    .Where(o =>
+                        o.Setting_ID == config.Id &&
+                        o.Status == "WAITING_SELL" &&
+                        o.PriceWaitSell.HasValue &&
+                        o.PriceWaitSell > future_Sell)
+                    .AsEnumerable()                  // 🔥 สำคัญมาก
+                    .OrderBy(o => o.PriceWaitSell)
+                    .Select(o => o.PriceWaitSell)
+                    .FirstOrDefault();
+
+                // -------------------------
+                // TopPriceSell (> LastActionSOLD)
+                // -------------------------
+                decimal? bottomPriceSell = context.DbOrders
+                    .Where(o =>
+                        o.Setting_ID == config.Id &&
+                        o.Status == "WAITING_SELL" &&
+                        o.PriceWaitSell.HasValue &&
+                        o.PriceWaitSell < future_Sell)
+                    .AsEnumerable()
+                     .OrderByDescending(o => o.PriceWaitSell)
+                    .Select(o => o.PriceWaitSell)
+                    .FirstOrDefault();
+
+                // -------------------------
+                // Validate data
+                // -------------------------
+                if (!bottomPriceSell.HasValue || !topPriceSell.HasValue)
+                    return null;
+                decimal? scale = 0.1m;
+
+                // -------------------------
+                // Calculate sell_between
+                // -------------------------
+                decimal? sellBetween = bottomPriceSell.Value + ((topPriceSell.Value - bottomPriceSell.Value) / 2m);
+
+                // -------------------------
+                // 0.2% threshold เปอร์เซ็นต์ (%) = ((topPriceSell.Value - sellBetween ) / sellBetween) * 100;
+                // -------------------------
+                decimal? percent02 = ((topPriceSell.Value - sellBetween) / sellBetween) * 100;
+                if (percent02 >= scale)
+                {
+                    decimal? NexBuy_ = topPriceSell.Value * 0.999m;
+                    NexBuy_Final = NexBuy_ - (NexBuy_ * config.PERCEN_SELL / 100);
+                    break;
+                }
+                else
+                {
+                    future_Sell = bottomPriceSell.Value * 0.999m;
+                    _isSold_Price = future_Sell;
+                }
+               
             }
 
             return NexBuy_Final;
@@ -1169,6 +1195,8 @@ namespace BotGridV1.Services
             //**    this Last BUY
             //**
             //*****************************************
+            _isSold_Price = null;
+
             bool hasSoldInLast3 = await context.DbOrders.Where(o => o.Setting_ID == config.Id &&
                                                                    (o.DateBuy != null || o.DateSell != null))
                                                                    .OrderByDescending(o => o.DateSell ?? o.DateBuy)
@@ -1251,7 +1279,7 @@ namespace BotGridV1.Services
             if (percent02 >= scale)
             {
                 //decimal? NexSell_Final = (topPriceSell.Value - bottomPriceSells.Value) / scale;
-                decimal?  NexBuy_ = topPriceSell.Value * 0.999m;
+                decimal? NexBuy_ = topPriceSell.Value * 0.999m;
                 NexBuy_Final = NexBuy_ - (NexBuy_ * config.PERCEN_SELL / 100);
             }
 

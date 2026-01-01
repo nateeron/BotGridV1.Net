@@ -162,7 +162,7 @@ namespace BotGridV1.Controllers
                 var token = _jwtService.GenerateToken(user);
 
                 // Get token expiration time from configuration
-                var expireMinutes = int.Parse(_configuration["Jwt:ExpireMinutes"] ?? "60");
+                var expireMinutes = int.Parse(_configuration["Jwt:ExpireMinutes"] ?? "1440");
                 var expireAt = DateTime.UtcNow.AddMinutes(expireMinutes);
 
                 return Ok(new LoginResponse
@@ -272,7 +272,7 @@ namespace BotGridV1.Controllers
 
                 // 9️⃣ Expire time (Access Token)
                 var expireMinutes =
-                    int.Parse(_configuration["Jwt:ExpireMinutes"] ?? "60");
+                    int.Parse(_configuration["Jwt:ExpireMinutes"] ?? "1440");
 
                 var expireAt = DateTime.UtcNow.AddMinutes(expireMinutes);
 
@@ -497,7 +497,7 @@ namespace BotGridV1.Controllers
                 var newAccessToken = _jwtService.GenerateToken(userForToken);
 
                 var expireMinutes =
-                    int.Parse(_configuration["Jwt:ExpireMinutes"] ?? "60");
+                    int.Parse(_configuration["Jwt:ExpireMinutes"] ?? "1440");
 
                 var expireAt = DateTime.UtcNow.AddMinutes(expireMinutes);
 
