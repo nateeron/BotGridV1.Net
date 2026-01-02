@@ -36,8 +36,6 @@ namespace BotGridV1.Services
         private decimal? _currentBuyThreshold = null; // Current buy threshold calculated in ProcessPriceUpdateAsync
         private decimal? _isSold_Price = null;
 
-
-
         public bool IsBuyPausedDueToInsufficientBalance
         {
             get
@@ -78,6 +76,13 @@ namespace BotGridV1.Services
             _logger.LogInformation("Buy pause due to insufficient balance has been manually reset.");
         }
 
+        public BotWorkerService(IServiceProvider serviceProvider, ILogger<BotWorkerService> logger, DiscordService? discordService = null)
+        {
+            _serviceProvider = serviceProvider;
+            _logger = logger;
+            _discordService = discordService;
+        }
+
         public void SetBuyPauseState(bool pause)
         {
             lock (_lockObject)
@@ -94,16 +99,9 @@ namespace BotGridV1.Services
                 _logger.LogInformation("Buy logic manually resumed.");
             }
         }
-
-        public BotWorkerService(IServiceProvider serviceProvider, ILogger<BotWorkerService> logger, DiscordService? discordService = null)
-        {
-            _serviceProvider = serviceProvider;
-            _logger = logger;
-            _discordService = discordService;
-        }
+        
         #region Start Stop
         public bool IsRunning => _isRunning;
-
         public async Task<bool> StartAsync(int? configId = null)
         {
             if (_isRunning)
@@ -201,7 +199,6 @@ namespace BotGridV1.Services
                 return false;
             }
         }
-
         public async Task StopAsync()
         {
             if (!_isRunning)
@@ -221,6 +218,7 @@ namespace BotGridV1.Services
                 lock (_lockObject)
                 {
                     _currentBuyThreshold = null; // Clear buy threshold when bot stops
+                    _isSold_Price = null; // Clear sold price when bot stops
                 }
                 _logger.LogInformation("Bot worker stopped");
 
@@ -329,6 +327,7 @@ namespace BotGridV1.Services
                     // Store null threshold (no threshold - buy immediately)
                     lock (_lockObject)
                     {
+                        //1
                         _currentBuyThreshold = null;
                     }
                 }
@@ -340,20 +339,27 @@ namespace BotGridV1.Services
                     // Action ล่าสุดเป็นขายแล้ว - ใช้ PriceSellActual ในการคำนวณ threshold
                     // A - (A * 2 / 100)
                     // *****************************************
-                    // **
-                    // **
                     // **  ต้องหาจุดซื้่อขาย
-                    // **
-                    // **
                     // *****************************************
+                    //1
+                    
                     buyThreshold = await CheckBuy_SOLD(context, config, lastActionOrder.PriceSellActual.Value);
                     // buyThreshold = lastActionOrder.PriceSellActual.Value - (lastActionOrder.PriceSellActual.Value * config.PERCEN_BUY / 100);
                     decimal buyThresholdRunUp_Buy = lastActionOrder.PriceSellActual.Value + (lastActionOrder.PriceSellActual.Value * config.PERCEN_BUY / 100);
 
-                    // Store buyThreshold for API access
+                    // Store buyThreshold for API access (keep previous value if CheckBuy_SOLD returns null)
+                    // เก็บ buyThreshold สำหรับ API (เก็บค่าเดิมไว้ถ้า CheckBuy_SOLD return null)
                     lock (_lockObject)
                     {
-                        _currentBuyThreshold = buyThreshold;
+                        // Only update if we got a valid threshold, otherwise keep the previous value
+                        // อัปเดตเฉพาะเมื่อได้ threshold ที่ถูกต้อง มิฉะนั้นเก็บค่าเดิมไว้
+                        if (buyThreshold.HasValue)
+                        {
+                            //2
+                            _currentBuyThreshold = buyThreshold;
+                        }
+                        // If CheckBuy_SOLD returns null, keep the previous threshold value
+                        // ถ้า CheckBuy_SOLD return null ให้เก็บค่า threshold เดิมไว้
                     }
 
                     // ตั้งเวลาเริ่มต้นรอซื้อเมื่อไม่มี openSellOrders
@@ -375,7 +381,10 @@ namespace BotGridV1.Services
                         (DateTime.UtcNow - _waitBuyTime.Value) >= TimeSpan.FromMinutes(5) &&
                         openSellOrders.Count == 0 && currentPrice < buyThresholdRunUp_Buy;
 
-                    if (currentPrice <= buyThreshold || (currentPrice >= buyThresholdRunUp_Buy && openSellOrders.Count == 0) || wait5MinutesPassed)
+                    // Use stored threshold if buyThreshold is null (from CheckBuy_SOLD)
+                    // ใช้ threshold ที่เก็บไว้ถ้า buyThreshold เป็น null (จาก CheckBuy_SOLD)
+                    decimal? thresholdToCheck = buyThreshold ?? _currentBuyThreshold;
+                    if (thresholdToCheck.HasValue && (currentPrice <= thresholdToCheck.Value || (currentPrice >= buyThresholdRunUp_Buy && openSellOrders.Count == 0) || wait5MinutesPassed))
                     {
                         shouldCheckBuy = true;
                         _waitBuyTime = null;
@@ -383,13 +392,6 @@ namespace BotGridV1.Services
                 }
                 else if (!string.IsNullOrEmpty(lastActionOrder.OrderBuyID) && lastActionOrder.PriceBuy.HasValue)
                 {
-                    // *****************************************
-                    // **
-                    // **  1 BUY
-                    // **  ต้องหาจุดซื้่อขาย กึ่งกลาง
-                    // **
-                    // **
-                    // *****************************************
 
                     // Last action is Buy (but not SOLD yet) - use PriceBuy for threshold calculation
                     // Action ล่าสุดเป็น Buy (แต่ยังไม่ขาย) - ใช้ PriceBuy ในการคำนวณ threshold
@@ -410,12 +412,74 @@ namespace BotGridV1.Services
                         shouldCheckBuy = true;
                     }
                 }
+                else if (lastActionOrder.Status == "WAITING_SELL")
+                {
+                    // Last action is WAITING_SELL - find the most recent SOLD order to calculate threshold
+                    // Action ล่าสุดเป็น WAITING_SELL - หา order ที่ SOLD ล่าสุดเพื่อคำนวณ threshold
+                    var lastSoldOrder = await context.DbOrders
+                        .Where(o => o.Setting_ID == config.Id && 
+                                   o.Status == "SOLD" && 
+                                   o.PriceSellActual.HasValue)
+                        .OrderByDescending(o => o.DateSell ?? o.DateBuy)
+                        .FirstOrDefaultAsync();
+
+                    if (lastSoldOrder != null)
+                    {
+                        // Use the most recent SOLD order to calculate threshold
+                        // ใช้ order ที่ SOLD ล่าสุดเพื่อคำนวณ threshold
+                        //2
+                        buyThreshold = await CheckBuy_SOLD(context, config, lastSoldOrder.PriceSellActual.Value);
+                        decimal buyThresholdRunUp_Buy = lastSoldOrder.PriceSellActual.Value + (lastSoldOrder.PriceSellActual.Value * config.PERCEN_BUY / 100);
+
+                        // Store buyThreshold for API access (keep previous value if CheckBuy_SOLD returns null)
+                        // เก็บ buyThreshold สำหรับ API (เก็บค่าเดิมไว้ถ้า CheckBuy_SOLD return null)
+                        lock (_lockObject)
+                        {
+                            // Only update if we got a valid threshold, otherwise keep the previous value
+                            // อัปเดตเฉพาะเมื่อได้ threshold ที่ถูกต้อง มิฉะนั้นเก็บค่าเดิมไว้
+                            if (buyThreshold.HasValue)
+                            {
+                                _currentBuyThreshold = buyThreshold;
+                            }
+                            // If CheckBuy_SOLD returns null, keep the previous threshold value
+                            // ถ้า CheckBuy_SOLD return null ให้เก็บค่า threshold เดิมไว้
+                        }
+
+                        // Use stored threshold if buyThreshold is null (from CheckBuy_SOLD)
+                        // ใช้ threshold ที่เก็บไว้ถ้า buyThreshold เป็น null (จาก CheckBuy_SOLD)
+                        decimal? thresholdToCheck = buyThreshold ?? _currentBuyThreshold;
+                        if (thresholdToCheck.HasValue && (currentPrice <= thresholdToCheck.Value || (currentPrice >= buyThresholdRunUp_Buy && openSellOrders.Count == 0)))
+                        {
+                            shouldCheckBuy = true;
+                        }
+                    }
+                    else
+                    {
+                        // No SOLD orders found - keep previous threshold or set to null if none exists
+                        // ไม่พบ order ที่ SOLD - เก็บ threshold เดิมไว้หรือ set เป็น null ถ้าไม่มี
+                        lock (_lockObject)
+                        {
+                            // Only clear if we don't have a previous threshold
+                            // ล้างเฉพาะเมื่อไม่มี threshold เดิม
+                            if (!_currentBuyThreshold.HasValue)
+                            {
+                                _currentBuyThreshold = null;
+                            }
+                        }
+                    }
+                }
                 else
                 {
-                    // No valid threshold - clear stored value
+                    // No valid threshold - clear stored value only if no previous threshold exists
+                    // ไม่มี threshold ที่ถูกต้อง - ล้างค่าเฉพาะเมื่อไม่มี threshold เดิม
                     lock (_lockObject)
                     {
-                        _currentBuyThreshold = null;
+                        // Only clear if we don't have a previous threshold
+                        // ล้างเฉพาะเมื่อไม่มี threshold เดิม
+                        if (!_currentBuyThreshold.HasValue)
+                        {
+                            _currentBuyThreshold = null;
+                        }
                     }
                 }
 
@@ -454,6 +518,7 @@ namespace BotGridV1.Services
             }
         }
 
+        #region no
         private async Task CheckAndBuyAsync(ApplicationDbContext context, DbSetting config, decimal currentPrice, DbOrder? lastActionOrder = null, List<DbOrder>? openSellOrders = null)
         {
             // Use a flag to track if we successfully acquired the buy lock
@@ -535,12 +600,9 @@ namespace BotGridV1.Services
                     // Last action is Sold - use PriceSellActual
                     // Action ล่าสุดเป็นขายแล้ว - ใช้ PriceSellActual
                     // *****************************************
-                    // **
-                    // **
                     // **  ต้องหาจุดซื้่อขาย
-                    // **
-                    // **
                     // *****************************************
+                    // 3 
                     threshold = await CheckBuy_SOLD(context, config, freshLastActionOrder.PriceSellActual.Value);
                     //threshold = freshLastActionOrder.PriceSellActual.Value - (freshLastActionOrder.PriceSellActual.Value * config.PERCEN_BUY / 100);
                 }
@@ -791,8 +853,7 @@ namespace BotGridV1.Services
                 }
             }
         }
-
-        #region no
+        
         private async Task CheckAndSellAsync(ApplicationDbContext context, DbSetting config, decimal currentPrice)
         {
             bool semaphoreAcquired = false;
@@ -1025,7 +1086,13 @@ namespace BotGridV1.Services
                     }
 
                     var saveResult = await context.SaveChangesAsync();
-
+                    
+                    // Update _isSold_Price with the actual sell price in real-time
+                    lock (_lockObject)
+                    {
+                        _isSold_Price = currentPrice; // Store the actual sell price for real-time access
+                    }
+                    
                     if (saveResult > 0)
                     {
                         lock (_lockObject)
@@ -1160,7 +1227,14 @@ namespace BotGridV1.Services
                 // Validate data
                 // -------------------------
                 if (!bottomPriceSell.HasValue || !topPriceSell.HasValue)
-                    return null;
+                {
+                    return NexbuyDefaul;
+                }
+                if (topPriceSell.HasValue)
+                {
+                    decimal? priceunder = topPriceSell.Value * 0.999m;
+                    return priceunder - (priceunder / 100 * config.PERCEN_SELL);
+                }
                 decimal? scale = 0.1m;
 
                 // -------------------------
@@ -1176,12 +1250,17 @@ namespace BotGridV1.Services
                 {
                     decimal? NexBuy_ = topPriceSell.Value * 0.999m;
                     NexBuy_Final = NexBuy_ - (NexBuy_ * config.PERCEN_SELL / 100);
+
                     break;
                 }
                 else
                 {
                     future_Sell = bottomPriceSell.Value * 0.999m;
-                    _isSold_Price = future_Sell;
+                    // Update _isSold_Price in real-time (thread-safe)
+                    lock (_lockObject)
+                    {
+                        _isSold_Price = future_Sell;
+                    }
                 }
                
             }
@@ -1195,8 +1274,7 @@ namespace BotGridV1.Services
             //**    this Last BUY
             //**
             //*****************************************
-            _isSold_Price = null;
-
+           
             bool hasSoldInLast3 = await context.DbOrders.Where(o => o.Setting_ID == config.Id &&
                                                                    (o.DateBuy != null || o.DateSell != null))
                                                                    .OrderByDescending(o => o.DateSell ?? o.DateBuy)
@@ -1242,6 +1320,7 @@ namespace BotGridV1.Services
                .OrderBy(o => o.PriceWaitSell)
                .Select(o => o.PriceWaitSell)
                .FirstOrDefault();
+
             // -------------------------
             // TopPriceSell (> lastActionBuy)
             // -------------------------
@@ -1319,13 +1398,7 @@ namespace BotGridV1.Services
                    normalized.Contains("min");
         }
 
-        private async Task ForceMarkOrderAsSoldAsync(
-            ApplicationDbContext context,
-            DbOrder order,
-            DbSetting config,
-            decimal currentPrice,
-            decimal coinQuantityUsed,
-            string reason)
+        private async Task ForceMarkOrderAsSoldAsync(ApplicationDbContext context,DbOrder order,DbSetting config,decimal currentPrice,decimal coinQuantityUsed,string reason)
         {
             try
             {
@@ -1343,6 +1416,13 @@ namespace BotGridV1.Services
                 }
 
                 var saveResult = await context.SaveChangesAsync();
+                
+                // Update _isSold_Price with the actual sell price in real-time
+                lock (_lockObject)
+                {
+                    _isSold_Price = currentPrice; // Store the actual sell price for real-time access
+                }
+                
                 if (saveResult > 0)
                 {
                     lock (_lockObject)
@@ -1429,6 +1509,28 @@ namespace BotGridV1.Services
             }
         }
 
+       
+
+        private BinanceRestClient CreateBinanceClient(DbSetting config)
+        {
+            return new BinanceRestClient(options =>
+            {
+                options.ApiCredentials = new ApiCredentials(config.API_KEY!, config.API_SECRET!);
+            });
+        }
+
+        protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+        {
+            // Background service is managed by Start/Stop methods
+            await Task.CompletedTask;
+        }
+
+        public override async Task StopAsync(CancellationToken cancellationToken)
+        {
+            await StopAsync();
+            await base.StopAsync(cancellationToken);
+        }
+        #endregion
         /// <summary>
         /// Calculate coin quantity from USD amount
         /// คำนวณจำนวน Coin จากจำนวนเงิน USD
@@ -1453,26 +1555,6 @@ namespace BotGridV1.Services
             return quantity;
         }
 
-        private BinanceRestClient CreateBinanceClient(DbSetting config)
-        {
-            return new BinanceRestClient(options =>
-            {
-                options.ApiCredentials = new ApiCredentials(config.API_KEY!, config.API_SECRET!);
-            });
-        }
-
-        protected override async Task ExecuteAsync(CancellationToken stoppingToken)
-        {
-            // Background service is managed by Start/Stop methods
-            await Task.CompletedTask;
-        }
-
-        public override async Task StopAsync(CancellationToken cancellationToken)
-        {
-            await StopAsync();
-            await base.StopAsync(cancellationToken);
-        }
-        #endregion
     }
     #region class
     public class OrderCache

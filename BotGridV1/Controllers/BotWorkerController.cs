@@ -721,6 +721,37 @@ namespace BotGridV1.Controllers
                 });
             }
         }
+
+        /// <summary>
+        /// Get the current sold price (_isSold_Price) updated in real-time
+        /// </summary>
+        [HttpPost]
+        public IActionResult GetSoldPrice()
+        {
+            try
+            {
+                var soldPrice = _botWorkerService.Pa_isSold_Price;
+
+                return Ok(new
+                {
+                    success = true,
+                    soldPrice = soldPrice,
+                    hasSoldPrice = soldPrice.HasValue,
+                    message = soldPrice.HasValue
+                        ? $"Current sold price: {soldPrice.Value}"
+                        : "No sold price available yet. This value is updated in real-time when orders are sold."
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error getting sold price");
+                return StatusCode(500, new
+                {
+                    success = false,
+                    message = ex.Message
+                });
+            }
+        }
     }
 
     public class req_SetBuyPauseState
