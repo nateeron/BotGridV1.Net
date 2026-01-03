@@ -9,6 +9,9 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Http.HttpResults;
 using System.Threading;
 using System.Collections.Generic;
+using System.Linq;
+using System.Threading.Tasks;
+using System;
 
 namespace BotGridV1.Services
 {
@@ -1226,13 +1229,13 @@ namespace BotGridV1.Services
                 // -------------------------
                 // Validate data
                 // -------------------------
-                //if (topPriceSell.HasValue && !bottomPriceSell.HasValue)
-                //{
-                //    decimal? priceunder = topPriceSell.Value * 0.999m;
-                //    return priceunder - (priceunder / 100 * config.PERCEN_SELL);
-                //}
-                //else
-                if (!bottomPriceSell.HasValue || !topPriceSell.HasValue)
+                
+                if (topPriceSell.HasValue && !bottomPriceSells.HasValue)
+                {
+                    decimal? priceunder = topPriceSell.Value * 0.999m;
+                    return priceunder - (priceunder / 100 * config.PERCEN_SELL);
+                }
+                else if (!bottomPriceSell.HasValue || !topPriceSell.HasValue)
                 {
                     return NexbuyDefaul;
                 }
@@ -1341,16 +1344,8 @@ namespace BotGridV1.Services
                                                             .Select(o => o.PriceWaitSell)
                                                             .FirstOrDefault();
                 // Validate data
-                //if (topPriceSell.HasValue && !bottomPriceSells.HasValue)
-                //{
-                //    decimal? priceunder = topPriceSell.Value * 0.999m;
-                //    return priceunder - (priceunder / 100 * config.PERCEN_SELL);
-                //}
-                //else 
                 if (!bottomPriceSells.HasValue || !topPriceSell.HasValue)
-                {
                     return NexbuyDefaul;
-                }
 
                 decimal? scale = 0.1m;
                 decimal? sellBetween = bottomPriceSells.Value + ((topPriceSell.Value - bottomPriceSells.Value) / 2m);
