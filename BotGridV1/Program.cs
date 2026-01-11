@@ -6,6 +6,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Microsoft.IdentityModel.Tokens;
 using System.Text;
+using System.Text.Json.Serialization;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -21,7 +22,9 @@ builder.Services.AddCors(options =>
             "https://www.cayoshibot.com",
             "https://api.cayoshibot.com",
             "http://localhost:5173",
-            "http://localhost:5174"
+            "http://localhost:5174",
+            "https://report.cayoshibot.com",
+            "http://localhost:2000"
         )
         .AllowAnyHeader()
         .AllowAnyMethod()
@@ -30,6 +33,12 @@ builder.Services.AddCors(options =>
 });
 
 builder.Services.AddControllers();
+    //.AddJsonOptions(options =>
+    //{
+    //    options.JsonSerializerOptions.PropertyNameCaseInsensitive = true;
+    //    options.JsonSerializerOptions.PropertyNamingPolicy = null; // Use PascalCase by default
+    //    options.JsonSerializerOptions.Converters.Add(new JsonStringEnumConverter()); // Allow enum as string
+    //});
 // Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
 builder.Services.AddEndpointsApiExplorer();
 

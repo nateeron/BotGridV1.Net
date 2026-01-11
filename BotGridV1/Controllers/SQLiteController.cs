@@ -7,6 +7,7 @@ using System.Text;
 using System.Text.Json;
 using System.IO;
 using System;
+using Microsoft.Data.Sqlite;
 
 namespace BotGridV1.Controllers
 {
@@ -111,6 +112,36 @@ namespace BotGridV1.Controllers
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error getting all settings");
+                return StatusCode(500, new { success = false, message = ex.Message });
+            }
+        }
+
+        /// <summary>
+        /// Get all Setting IDs from db_setting table
+        /// ดึง ID ทั้งหมดจากตาราง db_setting
+        /// </summary>
+        [HttpPost]
+        public async Task<IActionResult> GetSettingIds()
+        {
+            try
+            {
+                await _context.Database.EnsureCreatedAsync();
+                
+                var settingIds = await _context.DbSettings
+                    .Select(s => s.Id)
+                    .OrderBy(id => id)
+                    .ToListAsync();
+
+                return Ok(new
+                {
+                    success = true,
+                    count = settingIds.Count,
+                    data = settingIds
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error getting setting IDs");
                 return StatusCode(500, new { success = false, message = ex.Message });
             }
         }
@@ -1231,6 +1262,232 @@ namespace BotGridV1.Controllers
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error checking/creating UserLogin tables");
+                return StatusCode(500, new
+                {
+                    success = false,
+                    message = ex.Message,
+                    error = ex.ToString()
+                });
+            }
+        }
+
+        /// <summary>
+        /// Get Profit/Loss report grouped by period (Hour, HalfDay, Day, Week, Month, Year)
+        /// รายงานกำไร/ขาดทุน แบ่งตามช่วงเวลา (ชั่วโมง, ครึ่งวัน, วัน, สัปดาห์, เดือน, ปี)
+        /// </summary>
+        [HttpPost]
+        public async Task<IActionResult> GetProfitLossReport(req_GetProfitLossReport? req)
+        {
+            try
+            {
+                if (req == null)
+                {
+                    return BadRequest(new
+                    {
+                        success = false,
+                        message = "Request body is required"
+                    });
+                }
+
+                await _context.Database.EnsureCreatedAsync();
+
+                // Validate input - only validate date range if both dates are provided
+                if (req.DateFrom.HasValue && req.DateTo.HasValue && req.DateFrom.Value > req.DateTo.Value)
+                {
+                    return BadRequest(new
+                    {
+                        success = false,
+                        message = "DateFrom must be less than or equal to DateTo"
+                    });
+                }
+
+                // Validate SettingId exists in db_setting if provided
+                int? configId = null;
+                if (req.SettingId.HasValue)
+                {
+                    var setting = await _context.DbSettings.FindAsync(req.SettingId.Value);
+                    if (setting == null)
+                    {
+                        return BadRequest(new
+                        {
+                            success = false,
+                            message = $"Setting with ID {req.SettingId.Value} not found in db_setting"
+                        });
+                    }
+                    configId = setting.Id; // Get ConfigId from db_setting
+                }
+
+                // Get connection from context
+                var connection = _context.Database.GetDbConnection();
+                if (connection.State != System.Data.ConnectionState.Open)
+                {
+                    await connection.OpenAsync();
+                }
+
+                try
+                {
+                    string groupBy;
+                    string periodSelect;
+
+                    switch (req.Period)
+                    {
+                        case "Hour":
+                            periodSelect = "strftime('%Y-%m-%d %H:00', DateSell)";
+                            groupBy = "strftime('%Y-%m-%d %H', DateSell)";
+                            break;
+
+                        case "HalfDay":
+                            periodSelect = @"
+                            date(DateSell) || ' ' ||
+                            CASE WHEN CAST(strftime('%H', DateSell) AS INT) < 12
+                                 THEN '00-12' ELSE '12-24' END";
+                            groupBy = @"
+                            date(DateSell),
+                            CASE WHEN CAST(strftime('%H', DateSell) AS INT) < 12 THEN 0 ELSE 1 END";
+                            break;
+
+                        case "Day":
+                            periodSelect = "date(DateSell)";
+                            groupBy = "date(DateSell)";
+                            break;
+
+                        case "Week":
+                            periodSelect = "strftime('%Y-W%W', DateSell)";
+                            groupBy = "strftime('%Y-W%W', DateSell)";
+                            break;
+
+                        case "Month":
+                            periodSelect = "strftime('%Y-%m', DateSell)";
+                            groupBy = "strftime('%Y-%m', DateSell)";
+                            break;
+
+                        case "Year":
+                            periodSelect = "strftime('%Y', DateSell)";
+                            groupBy = "strftime('%Y', DateSell)";
+                            break;
+
+                        default:
+                            return BadRequest(new
+                            {
+                                success = false,
+                                message = $"Invalid period. Valid values: Hour, HalfDay, Day, Week, Month, Year"
+                            });
+                    }
+
+                    // Build SQL query with parameterized values
+                    string sql = $@"
+                    SELECT
+                        {periodSelect} AS Period,
+                        SUM(ProfitLoss) AS TotalProfit
+                    FROM db_Order
+                    WHERE Status = 'SOLD'
+                      AND DateSell IS NOT NULL";
+
+                    // Add date filter only if both dates are provided
+                    if (req.DateFrom.HasValue && req.DateTo.HasValue)
+                    {
+                        sql += " AND DateSell BETWEEN @DateFrom AND @DateTo";
+                    }
+                    else if (req.DateFrom.HasValue)
+                    {
+                        sql += " AND DateSell >= @DateFrom";
+                    }
+                    else if (req.DateTo.HasValue)
+                    {
+                        sql += " AND DateSell <= @DateTo";
+                    }
+                    // If both are null/empty, no date filter (select all)
+
+                    // Add Setting_ID filter if provided
+                    if (req.SettingId.HasValue)
+                    {
+                        sql += " AND Setting_ID = @SettingId";
+                    }
+
+                    sql += $@"
+                    GROUP BY {groupBy}
+                    ORDER BY Period";
+
+                    // Add LIMIT if PeriodCount is specified
+                    if (req.PeriodCount.HasValue && req.PeriodCount.Value > 0)
+                    {
+                        sql += $" LIMIT {req.PeriodCount.Value}";
+                    }
+
+                    using var cmd = connection.CreateCommand();
+                    cmd.CommandText = sql;
+                    
+                    // Add date parameters only if dates are provided
+                    if (req.DateFrom.HasValue)
+                    {
+                        var dateFromParam = cmd.CreateParameter();
+                        dateFromParam.ParameterName = "@DateFrom";
+                        dateFromParam.Value = req.DateFrom.Value.ToString("yyyy-MM-dd HH:mm:ss");
+                        cmd.Parameters.Add(dateFromParam);
+                    }
+
+                    if (req.DateTo.HasValue)
+                    {
+                        var dateToParam = cmd.CreateParameter();
+                        dateToParam.ParameterName = "@DateTo";
+                        dateToParam.Value = req.DateTo.Value.ToString("yyyy-MM-dd HH:mm:ss");
+                        cmd.Parameters.Add(dateToParam);
+                    }
+
+                    if (req.SettingId.HasValue)
+                    {
+                        var settingIdParam = cmd.CreateParameter();
+                        settingIdParam.ParameterName = "@SettingId";
+                        settingIdParam.Value = req.SettingId.Value;
+                        cmd.Parameters.Add(settingIdParam);
+                    }
+
+                    var result = new List<ProfitLossReport>();
+
+                    using var reader = await cmd.ExecuteReaderAsync();
+                    while (await reader.ReadAsync())
+                    {
+                        var periodValue = reader["Period"]?.ToString() ?? "";
+                        var totalProfit = reader.IsDBNull(reader.GetOrdinal("TotalProfit"))
+                            ? 0m
+                            : reader.GetDecimal(reader.GetOrdinal("TotalProfit"));
+
+                        result.Add(new ProfitLossReport
+                        {
+                            Period = periodValue,
+                            TotalProfit = totalProfit
+                        });
+                    }
+
+                    return Ok(new
+                    {
+                        success = true,
+                        data = result,
+                        summary = new
+                        {
+                            period = req.Period.ToString(),
+                            dateFrom = req.DateFrom,
+                            dateTo = req.DateTo,
+                            settingId = req.SettingId,
+                            configId = configId, // ConfigId from db_setting
+                            periodCount = req.PeriodCount,
+                            totalRecords = result.Count,
+                            totalProfit = result.Sum(r => r.TotalProfit),
+                            dateFilterApplied = req.DateFrom.HasValue || req.DateTo.HasValue
+                        }
+                    });
+                }
+                finally
+                {
+                    if (connection.State == System.Data.ConnectionState.Open)
+                    {
+                        await connection.CloseAsync();
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error getting profit/loss report");
                 return StatusCode(500, new
                 {
                     success = false,

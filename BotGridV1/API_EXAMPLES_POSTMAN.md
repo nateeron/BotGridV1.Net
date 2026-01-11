@@ -448,6 +448,414 @@ else:
 
 ---
 
+## SQLite API - Get Profit/Loss Report
+
+### Request Details
+- **Method:** `POST`
+- **URL:** `http://localhost:5081/api/SQLite/GetProfitLossReport`
+- **Headers:**
+  ```
+  Content-Type: application/json
+  ```
+
+### Request Body (JSON)
+**Note:** Property names support both PascalCase and camelCase (case-insensitive).
+
+**PascalCase (Recommended):**
+```json
+{
+  "DateFrom": "2024-01-01T00:00:00",
+  "DateTo": "2024-12-31T23:59:59",
+  "Period": "Day",
+  "SettingId": 1
+}
+```
+
+**camelCase (Also supported):**
+```json
+{
+  "dateFrom": "2024-01-01T00:00:00",
+  "dateTo": "2024-12-31T23:59:59",
+  "period": "Day",
+  "settingId": 1
+}
+```
+
+**Important Notes:** 
+- `Period` must be one of: `"Hour"`, `"HalfDay"`, `"Day"`, `"Week"`, `"Month"`, `"Year"` (case-sensitive enum value)
+- `DateFrom` and `DateTo` are optional - if null or empty, select all dates (no date filter)
+- `SettingId` is optional - omit it to include all settings
+- `PeriodCount` is optional - limit number of periods to return (e.g., 10 for last 10 periods)
+- Date format: ISO 8601 (e.g., "2024-01-01T00:00:00" or "2024-01-01")
+
+### Request Body Examples
+
+#### Example 1: Daily Report (All Settings)
+```json
+{
+  "dateFrom": "2024-01-01T00:00:00",
+  "dateTo": "2024-12-31T23:59:59",
+  "period": "Day"
+}
+```
+
+#### Example 4: Hourly Report (Specific Setting, All Dates)
+```json
+{
+  "Period": "Hour",
+  "SettingId": 1
+}
+```
+
+#### Example 5: Hourly Report (Specific Setting, Date Range)
+```json
+{
+  "DateFrom": "2024-12-01T00:00:00",
+  "DateTo": "2024-12-31T23:59:59",
+  "Period": "Hour",
+  "SettingId": 1
+}
+```
+
+#### Example 6: Weekly Report (Last 5 Weeks)
+```json
+{
+  "Period": "Week",
+  "PeriodCount": 5
+}
+```
+
+#### Example 7: Monthly Report (All Dates)
+```json
+{
+  "Period": "Month"
+}
+```
+
+#### Example 8: Half-Day Report (Date Range)
+```json
+{
+  "DateFrom": "2024-12-01T00:00:00",
+  "DateTo": "2024-12-31T23:59:59",
+  "Period": "HalfDay"
+}
+```
+
+#### Example 9: Yearly Report (All Dates, Last 3 Years)
+```json
+{
+  "Period": "Year",
+  "PeriodCount": 3
+}
+```
+
+### Period Values
+- `Hour` - Group by hour (e.g., "2024-12-01 14:00")
+- `HalfDay` - Group by half day (e.g., "2024-12-01 00-12" or "2024-12-01 12-24")
+- `Day` - Group by day (e.g., "2024-12-01")
+- `Week` - Group by week (e.g., "2024-W01")
+- `Month` - Group by month (e.g., "2024-12")
+- `Year` - Group by year (e.g., "2024")
+
+### Example cURL
+```bash
+curl -X POST "http://localhost:5081/api/SQLite/GetProfitLossReport" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "dateFrom": "2024-01-01T00:00:00",
+    "dateTo": "2024-12-31T23:59:59",
+    "period": "Day",
+    "settingId": 1
+  }'
+```
+
+### Example JavaScript/Fetch
+```javascript
+fetch('http://localhost:5081/api/SQLite/GetProfitLossReport', {
+  method: 'POST',
+  headers: {
+    'Content-Type': 'application/json',
+  },
+  body: JSON.stringify({
+    dateFrom: '2024-01-01T00:00:00',
+    dateTo: '2024-12-31T23:59:59',
+    period: 'Day',
+    settingId: 1
+  })
+})
+  .then(response => response.json())
+  .then(data => {
+    if (data.success) {
+      console.log('Period:', data.summary.period);
+      console.log('Total Records:', data.summary.totalRecords);
+      console.log('Total Profit:', data.summary.totalProfit);
+      data.data.forEach(item => {
+        console.log(`${item.period}: ${item.totalProfit} USDT`);
+      });
+    } else {
+      console.error('Error:', data.message);
+    }
+  })
+  .catch(error => console.error('Error:', error));
+```
+
+### Example C# HttpClient
+```csharp
+using System.Net.Http;
+using System.Text;
+using System.Text.Json;
+
+var client = new HttpClient();
+client.BaseAddress = new Uri("http://localhost:5081/");
+
+var request = new
+{
+    dateFrom = new DateTime(2024, 1, 1),
+    dateTo = new DateTime(2024, 12, 31, 23, 59, 59),
+    period = "Day",
+    settingId = 1
+};
+
+var json = JsonSerializer.Serialize(request);
+var content = new StringContent(json, Encoding.UTF8, "application/json");
+
+var response = await client.PostAsync("api/SQLite/GetProfitLossReport", content);
+
+if (response.IsSuccessStatusCode)
+{
+    var jsonString = await response.Content.ReadAsStringAsync();
+    var result = JsonSerializer.Deserialize<ProfitLossReportResponse>(jsonString,
+        new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+    
+    if (result.Success)
+    {
+        Console.WriteLine($"Period: {result.Summary.Period}");
+        Console.WriteLine($"Total Records: {result.Summary.TotalRecords}");
+        Console.WriteLine($"Total Profit: {result.Summary.TotalProfit}");
+        
+        foreach (var item in result.Data)
+        {
+            Console.WriteLine($"{item.Period}: {item.TotalProfit} USDT");
+        }
+    }
+}
+
+public class ProfitLossReportResponse
+{
+    public bool Success { get; set; }
+    public List<ProfitLossReportItem> Data { get; set; }
+    public ProfitLossReportSummary Summary { get; set; }
+}
+
+public class ProfitLossReportItem
+{
+    public string Period { get; set; }
+    public decimal TotalProfit { get; set; }
+}
+
+public class ProfitLossReportSummary
+{
+    public string Period { get; set; }
+    public DateTime DateFrom { get; set; }
+    public DateTime DateTo { get; set; }
+    public int? SettingId { get; set; }
+    public int TotalRecords { get; set; }
+    public decimal TotalProfit { get; set; }
+}
+```
+
+### Example Python requests
+```python
+import requests
+from datetime import datetime
+
+url = "http://localhost:5081/api/SQLite/GetProfitLossReport"
+headers = {"Content-Type": "application/json"}
+data = {
+    "dateFrom": "2024-01-01T00:00:00",
+    "dateTo": "2024-12-31T23:59:59",
+    "period": "Day",
+    "settingId": 1
+}
+
+response = requests.post(url, headers=headers, json=data)
+
+if response.status_code == 200:
+    result = response.json()
+    if result['success']:
+        print(f"Period: {result['summary']['period']}")
+        print(f"Total Records: {result['summary']['totalRecords']}")
+        print(f"Total Profit: {result['summary']['totalProfit']} USDT")
+        print("\nProfit/Loss by Period:")
+        for item in result['data']:
+            print(f"  {item['period']}: {item['totalProfit']} USDT")
+    else:
+        print(f"Error: {result['message']}")
+else:
+    print(f"Error: {response.status_code} - {response.text}")
+```
+
+### Success Response (200 OK)
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "period": "2024-01-01",
+      "totalProfit": 150.50
+    },
+    {
+      "period": "2024-01-02",
+      "totalProfit": 200.75
+    },
+    {
+      "period": "2024-01-03",
+      "totalProfit": -50.25
+    },
+    {
+      "period": "2024-01-04",
+      "totalProfit": 300.00
+    }
+  ],
+  "summary": {
+    "period": "Day",
+    "dateFrom": "2024-01-01T00:00:00",
+    "dateTo": "2024-12-31T23:59:59",
+    "settingId": 1,
+    "totalRecords": 4,
+    "totalProfit": 601.00
+  }
+}
+```
+
+### Hourly Report Response Example
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "period": "2024-12-01 00:00",
+      "totalProfit": 25.50
+    },
+    {
+      "period": "2024-12-01 01:00",
+      "totalProfit": 30.75
+    },
+    {
+      "period": "2024-12-01 02:00",
+      "totalProfit": 15.25
+    }
+  ],
+  "summary": {
+    "period": "Hour",
+    "dateFrom": "2024-12-01T00:00:00",
+    "dateTo": "2024-12-01T23:59:59",
+    "settingId": null,
+    "totalRecords": 3,
+    "totalProfit": 71.50
+  }
+}
+```
+
+### Weekly Report Response Example
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "period": "2024-W01",
+      "totalProfit": 500.00
+    },
+    {
+      "period": "2024-W02",
+      "totalProfit": 750.50
+    },
+    {
+      "period": "2024-W03",
+      "totalProfit": 600.25
+    }
+  ],
+  "summary": {
+    "period": "Week",
+    "dateFrom": "2024-01-01T00:00:00",
+    "dateTo": "2024-12-31T23:59:59",
+    "settingId": null,
+    "totalRecords": 3,
+    "totalProfit": 1850.75
+  }
+}
+```
+
+### Monthly Report Response Example
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "period": "2024-01",
+      "totalProfit": 2000.50
+    },
+    {
+      "period": "2024-02",
+      "totalProfit": 2500.75
+    },
+    {
+      "period": "2024-03",
+      "totalProfit": 1800.25
+    }
+  ],
+  "summary": {
+    "period": "Month",
+    "dateFrom": "2024-01-01T00:00:00",
+    "dateTo": "2024-12-31T23:59:59",
+    "settingId": null,
+    "totalRecords": 3,
+    "totalProfit": 6301.50
+  }
+}
+```
+
+### Error Response (400 Bad Request)
+```json
+{
+  "success": false,
+  "message": "DateFrom must be less than or equal to DateTo"
+}
+```
+
+### Error Response (500 Internal Server Error)
+```json
+{
+  "success": false,
+  "message": "Error message here",
+  "error": "Full error stack trace..."
+}
+```
+
+### Response Fields Explanation
+- `success`: Boolean indicating if the request was successful
+- `data`: Array of profit/loss records grouped by period
+  - `period`: The time period string (format depends on period type)
+  - `totalProfit`: Total profit/loss in USDT for that period
+- `summary`: Summary information about the report
+  - `period`: The period type used (Hour, HalfDay, Day, Week, Month, Year)
+  - `dateFrom`: Start date of the report
+  - `dateTo`: End date of the report
+  - `settingId`: Setting ID filter (null if not specified)
+  - `totalRecords`: Total number of periods in the result
+  - `totalProfit`: Sum of all profit/loss values
+
+### Notes
+- Only orders with `Status = "SOLD"` are included in the report
+- Only orders with `DateSell IS NOT NULL` are included
+- `settingId` is optional - if not provided, includes all settings
+- Date format: ISO 8601 format (e.g., "2024-01-01T00:00:00")
+- Profit/Loss values are in USDT
+- Negative values indicate losses
+- The report groups orders by the specified period and sums the ProfitLoss values
+
+---
+
 ## Common Issues
 
 ### Issue: "Username already exists"

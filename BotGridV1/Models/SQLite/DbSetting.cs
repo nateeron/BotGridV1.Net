@@ -70,5 +70,31 @@ namespace BotGridV1.Models.SQLite
         public int pageSize { get; set; } = 50;
         public string filter { get; set; } = "All"; // All, WAITING_SELL, SOLD
     }
+
+    public class req_GetProfitLossReport
+    {
+        public DateTime? DateFrom { get; set; } // Optional: if null or empty, select all dates
+        public DateTime? DateTo { get; set; } // Optional: if null or empty, select all dates
+        public string Period { get; set; } //= ReportPeriod.Day;
+        public int? SettingId { get; set; } // Optional: filter by Setting ID
+        public int? PeriodCount { get; set; } // Optional: limit number of periods to return
+    }
+
+
+    public class ProfitLossReport
+    {
+        public string Period { get; set; }
+        public decimal TotalProfit { get; set; }
+    }
+    public enum ReportPeriod
+    {
+        Hour,
+        HalfDay,
+        Day,
+        Week,
+        Month,
+        Year
+    }
+
 }
 
