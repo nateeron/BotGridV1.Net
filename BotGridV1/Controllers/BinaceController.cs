@@ -1,4 +1,8 @@
-﻿using Microsoft.AspNetCore.Http;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
+using System.Text.Json.Serialization;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using BotGridV1.Models.Binace;
@@ -14,13 +18,16 @@ namespace BotGridV1.Controllers
     [ApiController]
     public class BinaceController : ControllerBase
     {
+        private const string BinanceMarginBaseUrl = "https://api.binance.com";
         private readonly ApplicationDbContext _context;
         private readonly ILogger<BinaceController> _logger;
+        private readonly IHttpClientFactory _httpClientFactory;
 
-        public BinaceController(ApplicationDbContext context, ILogger<BinaceController> logger)
+        public BinaceController(ApplicationDbContext context, ILogger<BinaceController> logger, IHttpClientFactory httpClientFactory)
         {
             _context = context;
             _logger = logger;
+            _httpClientFactory = httpClientFactory;
         }
 
         /// <summary>
@@ -500,6 +507,85 @@ namespace BotGridV1.Controllers
             {
                 _logger.LogError(ex, "Error getting filled orders");
                 return StatusCode(500, new res_GetFilledOrders
+                {
+                    Success = false,
+                    Message = ex.Message
+                });
+            }
+        }
+
+        /// <summary>
+        /// Get Order Margin Cross - Query all orders for cross margin account (Binance Margin, not isolated).
+        /// </summary>
+        [HttpPost]
+        public async Task<ActionResult<res_GetOrderMarginCross>> GetOrderMarginCross(req_GetOrderMarginCross req)
+        {
+            try
+            {
+                await _context.Database.EnsureCreatedAsync();
+
+                var config = await GetConfigAsync(req.ConfigId);
+                if (config == null)
+                {
+                    return BadRequest(new res_GetOrderMarginCross
+                    {
+                        Success = false,
+                        Message = "Configuration not found. Please provide valid ConfigId or ensure database has settings."
+                    });
+                }
+
+                var symbol = !string.IsNullOrEmpty(req.Symbol) ? req.Symbol : config.SYMBOL;
+                if (string.IsNullOrEmpty(symbol))
+                {
+                    return BadRequest(new res_GetOrderMarginCross
+                    {
+                        Success = false,
+                        Message = "Symbol is required for margin all orders (use request or config SYMBOL)."
+                    });
+                }
+
+                var limit = Math.Min(req.Limit ?? 100, 500); // Binance margin allOrders max 500
+                var marginOrders = await GetMarginAllOrdersAsync(config, symbol, isIsolated: false, req.OrderId, req.StartTime, req.EndTime, limit);
+                if (marginOrders == null)
+                {
+                    return StatusCode(500, new res_GetOrderMarginCross
+                    {
+                        Success = false,
+                        Message = "Failed to get margin orders from Binance."
+                    });
+                }
+
+                var ordersList = marginOrders
+                    .OrderByDescending(o => o.CreateTime)
+                    .Select(o => new res_OrderMarginCross
+                    {
+                        OrderId = o.OrderId,
+                        Symbol = o.Symbol,
+                        Side = o.Side,
+                        Type = o.Type,
+                        Status = o.Status,
+                        Quantity = o.Quantity,
+                        Price = o.Price,
+                        QuantityFilled = o.QuantityFilled,
+                        QuoteQuantityFilled = o.QuoteQuantityFilled,
+                        CreateTime = o.CreateTime,
+                        UpdateTime = o.UpdateTime,
+                        IsIsolated = o.IsIsolated
+                    })
+                    .ToList();
+
+                return Ok(new res_GetOrderMarginCross
+                {
+                    Success = true,
+                    Message = "Cross margin orders retrieved successfully",
+                    Orders = ordersList,
+                    Total = ordersList.Count
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error getting order margin cross");
+                return StatusCode(500, new res_GetOrderMarginCross
                 {
                     Success = false,
                     Message = ex.Message
@@ -1105,6 +1191,174 @@ namespace BotGridV1.Controllers
             };
         }
 
+        /// <summary>
+        /// Call Binance margin allOrders (GET /sapi/v1/margin/allOrders) with signature.
+        /// </summary>
+        private async Task<List<BinanceMarginOrderDto>?> GetMarginAllOrdersAsync(
+            DbSetting config,
+            string symbol,
+            bool isIsolated,
+            long? orderId,
+            DateTime? startTime,
+            DateTime? endTime,
+            int limit)
+        {
+            if (string.IsNullOrEmpty(config.API_KEY) || string.IsNullOrEmpty(config.API_SECRET))
+                return null;
+
+            var timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            var query = new List<string>
+            {
+                $"symbol={Uri.EscapeDataString(symbol)}",
+                $"isIsolated={ (isIsolated ? "TRUE" : "FALSE")}",
+                $"timestamp={timestamp}",
+                $"limit={limit}"
+            };
+            if (orderId.HasValue)
+                query.Add($"orderId={orderId.Value}");
+            if (startTime.HasValue)
+                query.Add($"startTime={startTime.Value.ToUniversalTime().Subtract(DateTime.UnixEpoch).TotalMilliseconds:0}");
+            if (endTime.HasValue)
+                query.Add($"endTime={endTime.Value.ToUniversalTime().Subtract(DateTime.UnixEpoch).TotalMilliseconds:0}");
+
+            var queryString = string.Join("&", query);
+            var signature = SignHmacSha256(config.API_SECRET!, queryString);
+            var url = $"{BinanceMarginBaseUrl}/sapi/v1/margin/allOrders?{queryString}&signature={signature}";
+
+            var httpClient = _httpClientFactory.CreateClient();
+            using var request = new HttpRequestMessage(HttpMethod.Get, url);
+            request.Headers.Add("X-MBX-APIKEY", config.API_KEY);
+
+            var response = await httpClient.SendAsync(request);
+            if (!response.IsSuccessStatusCode)
+            {
+                _logger.LogWarning("Margin allOrders failed: {StatusCode} {Content}", response.StatusCode, await response.Content.ReadAsStringAsync());
+                return null;
+            }
+
+            var json = await response.Content.ReadAsStringAsync();
+            var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+            var list = JsonSerializer.Deserialize<List<BinanceMarginOrderDto>>(json, options);
+            return list;
+        }
+
+        private static string SignHmacSha256(string secret, string message)
+        {
+            using var hmac = new HMACSHA256(Encoding.UTF8.GetBytes(secret));
+            var hash = hmac.ComputeHash(Encoding.UTF8.GetBytes(message));
+            return Convert.ToHexString(hash).ToLowerInvariant();
+        }
+
         #endregion
+    }
+
+    /// <summary>
+    /// DTO for Binance margin order from /sapi/v1/margin/allOrders
+    /// Binance returns numeric values as strings, so we use string properties with conversion
+    /// </summary>
+    internal class BinanceMarginOrderDto
+    {
+        [JsonPropertyName("orderId")]
+        [JsonConverter(typeof(JsonStringToLongConverter))]
+        public long OrderId { get; set; }
+        [JsonPropertyName("symbol")]
+        public string Symbol { get; set; } = string.Empty;
+        [JsonPropertyName("side")]
+        public string Side { get; set; } = string.Empty;
+        [JsonPropertyName("type")]
+        public string Type { get; set; } = string.Empty;
+        [JsonPropertyName("status")]
+        public string Status { get; set; } = string.Empty;
+        [JsonPropertyName("price")]
+        [JsonConverter(typeof(JsonStringToDecimalConverter))]
+        public decimal Price { get; set; }
+        [JsonPropertyName("origQty")]
+        [JsonConverter(typeof(JsonStringToDecimalConverter))]
+        public decimal Quantity { get; set; }
+        [JsonPropertyName("executedQty")]
+        [JsonConverter(typeof(JsonStringToDecimalConverter))]
+        public decimal QuantityFilled { get; set; }
+        [JsonPropertyName("cummulativeQuoteQty")]
+        [JsonConverter(typeof(JsonStringToDecimalConverter))]
+        public decimal QuoteQuantityFilled { get; set; }
+        [JsonPropertyName("time")]
+        [JsonConverter(typeof(JsonStringToLongConverter))]
+        public long Time { get; set; }
+        [JsonPropertyName("updateTime")]
+        [JsonConverter(typeof(JsonStringToLongConverter))]
+        public long UpdateTimeMs { get; set; }
+        [JsonPropertyName("isIsolated")]
+        public bool IsIsolated { get; set; }
+
+        [JsonIgnore]
+        public DateTime CreateTime => DateTime.UnixEpoch.AddMilliseconds(Time);
+        [JsonIgnore]
+        public DateTime? UpdateTime => UpdateTimeMs > 0 ? DateTime.UnixEpoch.AddMilliseconds(UpdateTimeMs) : null;
+    }
+
+    /// <summary>
+    /// JsonConverter that handles both string and number for decimal values
+    /// </summary>
+    internal class JsonStringToDecimalConverter : JsonConverter<decimal>
+    {
+        public override decimal Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+        {
+            if (reader.TokenType == JsonTokenType.String)
+            {
+                var str = reader.GetString();
+                if (string.IsNullOrWhiteSpace(str))
+                    return 0;
+                if (decimal.TryParse(str, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var value))
+                    return value;
+                return 0;
+            }
+            if (reader.TokenType == JsonTokenType.Number)
+            {
+                return reader.GetDecimal();
+            }
+            if (reader.TokenType == JsonTokenType.Null)
+            {
+                return 0;
+            }
+            return 0;
+        }
+
+        public override void Write(Utf8JsonWriter writer, decimal value, JsonSerializerOptions options)
+        {
+            writer.WriteNumberValue(value);
+        }
+    }
+
+    /// <summary>
+    /// JsonConverter that handles both string and number for long values
+    /// </summary>
+    internal class JsonStringToLongConverter : JsonConverter<long>
+    {
+        public override long Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+        {
+            if (reader.TokenType == JsonTokenType.String)
+            {
+                var str = reader.GetString();
+                if (string.IsNullOrWhiteSpace(str))
+                    return 0;
+                if (long.TryParse(str, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var value))
+                    return value;
+                return 0;
+            }
+            if (reader.TokenType == JsonTokenType.Number)
+            {
+                return reader.GetInt64();
+            }
+            if (reader.TokenType == JsonTokenType.Null)
+            {
+                return 0;
+            }
+            return 0;
+        }
+
+        public override void Write(Utf8JsonWriter writer, long value, JsonSerializerOptions options)
+        {
+            writer.WriteNumberValue(value);
+        }
     }
 }

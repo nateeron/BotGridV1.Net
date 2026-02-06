@@ -247,5 +247,48 @@ namespace BotGridV1.Models.Binace
         public bool IsSynchronized { get; set; } // True if difference is within acceptable range (±1000ms)
         public string? Recommendation { get; set; }
     }
+
+    /// <summary>
+    /// Request for Get Order Margin Cross - query cross margin account orders
+    /// </summary>
+    public class req_GetOrderMarginCross
+    {
+        public int? ConfigId { get; set; }
+        public string? Symbol { get; set; } // Required by Binance for allOrders
+        public long? OrderId { get; set; }
+        public DateTime? StartTime { get; set; }
+        public DateTime? EndTime { get; set; }
+        public int? Limit { get; set; } = 100; // Default 100, max 500
+    }
+
+    /// <summary>
+    /// Single margin order in response
+    /// </summary>
+    public class res_OrderMarginCross
+    {
+        public long OrderId { get; set; }
+        public string Symbol { get; set; } = string.Empty;
+        public string Side { get; set; } = string.Empty;
+        public string Type { get; set; } = string.Empty;
+        public string Status { get; set; } = string.Empty;
+        public decimal Quantity { get; set; }
+        public decimal Price { get; set; }
+        public decimal QuantityFilled { get; set; }
+        public decimal QuoteQuantityFilled { get; set; }
+        public DateTime CreateTime { get; set; }
+        public DateTime? UpdateTime { get; set; }
+        public bool IsIsolated { get; set; }
+    }
+
+    /// <summary>
+    /// Response for Get Order Margin Cross
+    /// </summary>
+    public class res_GetOrderMarginCross
+    {
+        public bool Success { get; set; }
+        public string? Message { get; set; }
+        public List<res_OrderMarginCross> Orders { get; set; } = new();
+        public int Total { get; set; }
+    }
 }
 
