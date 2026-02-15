@@ -1,4 +1,4 @@
-﻿using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using BotGridV1.Models.Binace;
@@ -1055,6 +1055,104 @@ namespace BotGridV1.Controllers
             {
                 _logger.LogError(ex, "Error getting server time");
                 return StatusCode(500, new res_ServerTime
+                {
+                    Success = false,
+                    Message = ex.Message
+                });
+            }
+        }
+
+        /// <summary>
+        /// Get Binance Margin Account Information - All margin account details including balances, margin level, and account status
+        /// </summary>
+        [HttpPost]
+        public async Task<ActionResult<res_GetMarginInfo>> GetMarginInfo(req_GetMarginInfo? req = null)
+        {
+            try
+            {
+                await _context.Database.EnsureCreatedAsync();
+
+                // Get configuration from database
+                var config = await GetConfigAsync(req?.ConfigId);
+                if (config == null)
+                {
+                    return BadRequest(new res_GetMarginInfo
+                    {
+                        Success = false,
+                        Message = "Configuration not found. Please provide valid ConfigId or ensure database has settings."
+                    });
+                }
+
+                // Create Binance client
+                var client = CreateBinanceClient(config);
+
+                // Get margin account information
+                var marginAccountResult = await client.SpotApi.Account.GetMarginAccountInfoAsync();
+                
+                if (!marginAccountResult.Success)
+                {
+                    return StatusCode(500, new res_GetMarginInfo
+                    {
+                        Success = false,
+                        Message = $"Failed to get margin account info: {marginAccountResult.Error?.Message}"
+                    });
+                }
+
+                var marginAccount = marginAccountResult.Data;
+                var balances = new List<res_MarginBalance>();
+
+                // Process balances
+                if (marginAccount.Balances != null)
+                {
+                    foreach (var balance in marginAccount.Balances)
+                    {
+                        // Calculate total asset (borrowed + available)
+                        var totalAsset = balance.Borrowed + balance.Available;
+                        
+                        // Only include balances with non-zero values
+                        if (totalAsset > 0 || balance.Borrowed > 0 || balance.Available > 0 || balance.Locked > 0)
+                        {
+                            balances.Add(new res_MarginBalance
+                            {
+                                Asset = balance.Asset,
+                                Borrowed = balance.Borrowed,
+                                Free = balance.Available,
+                                Interest = balance.Interest,
+                                Locked = balance.Locked,
+                                NetAsset = balance.NetAsset,
+                                NetAssetOfBtc = 0, // Not available in BinanceMarginBalance, calculate if needed
+                                TotalAsset = totalAsset
+                            });
+                        }
+                    }
+                }
+
+                // Sort balances by TotalAsset descending (highest first)
+                balances = balances.OrderByDescending(b => b.TotalAsset).ToList();
+
+                return Ok(new res_GetMarginInfo
+                {
+                    Success = true,
+                    Message = "Margin account information retrieved successfully",
+                    BorrowEnabled = marginAccount.BorrowEnabled ? 1 : 0,
+                    MarginLevel = marginAccount.MarginLevel,
+                    TotalAssetOfBtc = marginAccount.TotalAssetOfBtc,
+                    TotalLiabilityOfBtc = marginAccount.TotalLiabilityOfBtc,
+                    TotalNetAssetOfBtc = marginAccount.TotalNetAssetOfBtc,
+                    TradeEnabled = marginAccount.TradeEnabled ? 1 : 0,
+                    TransferEnabled = marginAccount.TransferEnabled ? 1 : 0,
+                    Balances = balances,
+                    AdditionalData = new Dictionary<string, object>
+                    {
+                        { "BalanceCount", balances.Count },
+                        { "TotalBalances", marginAccount.Balances?.Count() ?? 0 }
+                    }
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error getting margin account info");
+                return StatusCode(500, new res_GetMarginInfo
                 {
                     Success = false,
                     Message = ex.Message

@@ -247,5 +247,37 @@ namespace BotGridV1.Models.Binace
         public bool IsSynchronized { get; set; } // True if difference is within acceptable range (±1000ms)
         public string? Recommendation { get; set; }
     }
+
+    public class req_GetMarginInfo
+    {
+        public int? ConfigId { get; set; }
+    }
+
+    public class res_MarginBalance
+    {
+        public string Asset { get; set; } = string.Empty;
+        public decimal Borrowed { get; set; }
+        public decimal Free { get; set; }
+        public decimal Interest { get; set; }
+        public decimal Locked { get; set; }
+        public decimal NetAsset { get; set; }
+        public decimal NetAssetOfBtc { get; set; }
+        public decimal TotalAsset { get; set; }
+    }
+
+    public class res_GetMarginInfo
+    {
+        public bool Success { get; set; }
+        public string? Message { get; set; }
+        public decimal? BorrowEnabled { get; set; }
+        public decimal? MarginLevel { get; set; }
+        public decimal? TotalAssetOfBtc { get; set; }
+        public decimal? TotalLiabilityOfBtc { get; set; }
+        public decimal? TotalNetAssetOfBtc { get; set; }
+        public decimal? TradeEnabled { get; set; }
+        public decimal? TransferEnabled { get; set; }
+        public List<res_MarginBalance>? Balances { get; set; }
+        public Dictionary<string, object>? AdditionalData { get; set; }
+    }
 }
 
