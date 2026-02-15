@@ -204,12 +204,12 @@ namespace BotGridV1.Models.Binace
         public string Side { get; set; } = string.Empty; // Required: "BUY" or "SELL"
         public string OrderType { get; set; } = "MARKET"; // "MARKET" or "LIMIT"
         public decimal? Price { get; set; } // Required for LIMIT orders
-        
+
         // Value specification - use ONE of these:
         public decimal? CoinQuantity { get; set; } // Base asset quantity (e.g., 0.1 BTC)
         public decimal? UsdAmount { get; set; } // USD/USDT amount to spend/receive
         public decimal? PortfolioPercent { get; set; } // Percentage of portfolio (0-100)
-        
+
         public TimeInForce? TimeInForce { get; set; } = Binance.Net.Enums.TimeInForce.GoodTillCanceled; // For LIMIT orders
     }
 
@@ -278,47 +278,48 @@ namespace BotGridV1.Models.Binace
         public decimal? TransferEnabled { get; set; }
         public List<res_MarginBalance>? Balances { get; set; }
         public Dictionary<string, object>? AdditionalData { get; set; }
-    /// <summary>
-    /// Request for Get Order Margin Cross - query cross margin account orders
-    /// </summary>
-    public class req_GetOrderMarginCross
-    {
-        public int? ConfigId { get; set; }
-        public string? Symbol { get; set; } // Required by Binance for allOrders
-        public long? OrderId { get; set; }
-        public DateTime? StartTime { get; set; }
-        public DateTime? EndTime { get; set; }
-        public int? Limit { get; set; } = 100; // Default 100, max 500
-    }
+        /// <summary>
+        /// Request for Get Order Margin Cross - query cross margin account orders
+        /// </summary>
+        public class req_GetOrderMarginCross
+        {
+            public int? ConfigId { get; set; }
+            public string? Symbol { get; set; } // Required by Binance for allOrders
+            public long? OrderId { get; set; }
+            public DateTime? StartTime { get; set; }
+            public DateTime? EndTime { get; set; }
+            public int? Limit { get; set; } = 100; // Default 100, max 500
+        }
 
-    /// <summary>
-    /// Single margin order in response
-    /// </summary>
-    public class res_OrderMarginCross
-    {
-        public long OrderId { get; set; }
-        public string Symbol { get; set; } = string.Empty;
-        public string Side { get; set; } = string.Empty;
-        public string Type { get; set; } = string.Empty;
-        public string Status { get; set; } = string.Empty;
-        public decimal Quantity { get; set; }
-        public decimal Price { get; set; }
-        public decimal QuantityFilled { get; set; }
-        public decimal QuoteQuantityFilled { get; set; }
-        public DateTime CreateTime { get; set; }
-        public DateTime? UpdateTime { get; set; }
-        public bool IsIsolated { get; set; }
-    }
+        /// <summary>
+        /// Single margin order in response
+        /// </summary>
+        public class res_OrderMarginCross
+        {
+            public long OrderId { get; set; }
+            public string Symbol { get; set; } = string.Empty;
+            public string Side { get; set; } = string.Empty;
+            public string Type { get; set; } = string.Empty;
+            public string Status { get; set; } = string.Empty;
+            public decimal Quantity { get; set; }
+            public decimal Price { get; set; }
+            public decimal QuantityFilled { get; set; }
+            public decimal QuoteQuantityFilled { get; set; }
+            public DateTime CreateTime { get; set; }
+            public DateTime? UpdateTime { get; set; }
+            public bool IsIsolated { get; set; }
+        }
 
-    /// <summary>
-    /// Response for Get Order Margin Cross
-    /// </summary>
-    public class res_GetOrderMarginCross
-    {
-        public bool Success { get; set; }
-        public string? Message { get; set; }
-        public List<res_OrderMarginCross> Orders { get; set; } = new();
-        public int Total { get; set; }
+        /// <summary>
+        /// Response for Get Order Margin Cross
+        /// </summary>
+        public class res_GetOrderMarginCross
+        {
+            public bool Success { get; set; }
+            public string? Message { get; set; }
+            public List<res_OrderMarginCross> Orders { get; set; } = new();
+            public int Total { get; set; }
+        }
     }
 }
 

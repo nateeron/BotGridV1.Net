@@ -11,6 +11,7 @@ using Binance.Net.Clients;
 using Binance.Net.Enums;
 using CryptoExchange.Net.Authentication;
 using CryptoExchange.Net.Objects;
+using static BotGridV1.Models.Binace.res_GetMarginInfo;
 
 namespace BotGridV1.Controllers
 {
