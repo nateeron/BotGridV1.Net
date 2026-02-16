@@ -1,4 +1,4 @@
-﻿using Binance.Net.Clients;
+using Binance.Net.Clients;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using BotGridV1.Services;
@@ -272,6 +272,118 @@ namespace BotGridV1.Controllers
                     success = false,
                     message = ex.Message,
                     status = "ERROR"
+                });
+            }
+        }
+
+        /// <summary>
+        /// Get current trading mode: Spot or MarginCross (same config as Start/Stop).
+        /// </summary>
+        [HttpPost]
+        public async Task<IActionResult> GetTradingMode(req_SwitchTradingMode req)
+        {
+            try
+            {
+                using var scope = _serviceProvider.CreateScope();
+                var context = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+                await context.Database.EnsureCreatedAsync();
+                await EnsureMarginCrossColumnAsync(context);
+
+                var config = req.ConfigId.HasValue
+                    ? await context.DbSettings.FindAsync(req.ConfigId.Value)
+                    : await context.DbSettings.FirstOrDefaultAsync();
+
+                if (config == null)
+                {
+                    return BadRequest(new res_SwitchTradingMode
+                    {
+                        Success = false,
+                        Message = "Configuration not found",
+                        Mode = "Spot"
+                    });
+                }
+
+                var mode = config.UseMarginCross ? "MarginCross" : "Spot";
+                return Ok(new res_SwitchTradingMode
+                {
+                    Success = true,
+                    Message = $"Trading mode: {mode}",
+                    Mode = mode,
+                    ConfigId = config.Id
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error getting trading mode");
+                return StatusCode(500, new res_SwitchTradingMode
+                {
+                    Success = false,
+                    Message = ex.Message,
+                    Mode = "Spot"
+                });
+            }
+        }
+
+        /// <summary>
+        /// Switch trading mode: Spot or MarginCross. Works like Start/Stop (updates config; if bot is running, config is refreshed).
+        /// </summary>
+        [HttpPost]
+        public async Task<IActionResult> SwitchTradingMode(req_SwitchTradingMode req)
+        {
+            try
+            {
+                var mode = (req.Mode ?? "").Trim();
+                if (mode != "Spot" && mode != "MarginCross")
+                {
+                    return BadRequest(new res_SwitchTradingMode
+                    {
+                        Success = false,
+                        Message = "Mode must be 'Spot' or 'MarginCross'",
+                        Mode = "Spot"
+                    });
+                }
+
+                using var scope = _serviceProvider.CreateScope();
+                var context = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+                await context.Database.EnsureCreatedAsync();
+                await EnsureMarginCrossColumnAsync(context);
+
+                var config = req.ConfigId.HasValue
+                    ? await context.DbSettings.FindAsync(req.ConfigId.Value)
+                    : await context.DbSettings.FirstOrDefaultAsync();
+
+                if (config == null)
+                {
+                    return BadRequest(new res_SwitchTradingMode
+                    {
+                        Success = false,
+                        Message = "Configuration not found",
+                        Mode = "Spot"
+                    });
+                }
+
+                config.UseMarginCross = (mode == "MarginCross");
+                await context.SaveChangesAsync();
+
+                await _botWorkerService.RefreshConfigFromDbAsync(config.Id);
+
+                var newMode = config.UseMarginCross ? "MarginCross" : "Spot";
+                return Ok(new res_SwitchTradingMode
+                {
+                    Success = true,
+                    Message = $"Trading mode set to {newMode}",
+                    Mode = newMode,
+                    ConfigId = config.Id
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error switching trading mode");
+                return StatusCode(500, new res_SwitchTradingMode
+                {
+                    Success = false,
+                    Message = ex.Message,
+                    Mode = "Spot"
                 });
             }
         }
@@ -750,6 +862,20 @@ namespace BotGridV1.Controllers
                     success = false,
                     message = ex.Message
                 });
+            }
+        }
+
+        /// <summary>Ensure UseMarginCross column exists (for existing DBs without migrations).</summary>
+        private static async Task EnsureMarginCrossColumnAsync(ApplicationDbContext context)
+        {
+            try
+            {
+                await context.Database.ExecuteSqlRawAsync(
+                    "ALTER TABLE db_setting ADD COLUMN UseMarginCross INTEGER DEFAULT 0");
+            }
+            catch
+            {
+                // Column already exists or other schema error - ignore
             }
         }
     }

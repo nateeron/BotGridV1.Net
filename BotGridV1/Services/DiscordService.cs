@@ -431,6 +431,45 @@ namespace BotGridV1.Services
                 fields
             );
         }
+
+        /// <summary>
+        /// Alert: Margin level report (e.g. level &lt;= 1.4, bot stopped).
+        /// </summary>
+        public async Task LogMarginLevelAlertAsync(string? webhook1, string? webhook2, decimal? marginLevel, string message, string? symbol = null, string? configId = null)
+        {
+            var fields = new Dictionary<string, string>
+            {
+                { "Margin Level", marginLevel.HasValue ? marginLevel.Value.ToString("F4") : "N/A" },
+                { "Message", message }
+            };
+            if (!string.IsNullOrEmpty(symbol))
+                fields.Add("Symbol", symbol);
+
+            if (_alertLogService != null)
+            {
+                await _alertLogService.AddLogAsync(new AlertLog
+                {
+                    Type = "MARGIN_LEVEL",
+                    Level = "Warning",
+                    Title = "📊 Margin Level Alert",
+                    Message = message,
+                    Fields = fields,
+                    Color = 0xe67e22,
+                    ConfigId = configId,
+                    Symbol = symbol,
+                    Timestamp = DateTime.UtcNow
+                });
+            }
+
+            await SendToAllWebhooksAsync(
+                webhook1,
+                webhook2,
+                "📊 Margin Level Alert",
+                message,
+                0xe67e22,
+                fields
+            );
+        }
     }
 }
 

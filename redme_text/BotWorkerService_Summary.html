@@ -1,0 +1,441 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>BotWorkerService – สรุปการทำงาน</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #0f1419;
+      --bg-card: #1a2332;
+      --bg-code: #161b22;
+      --text: #e6edf3;
+      --text-muted: #8b949e;
+      --accent: #58a6ff;
+      --accent-soft: rgba(88, 166, 255, 0.15);
+      --border: #30363d;
+      --success: #3fb950;
+      --warning: #d29922;
+      --danger: #f85149;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: 'Sarabun', -apple-system, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.7;
+      margin: 0;
+      padding: 2rem 1rem 3rem;
+      max-width: 900px;
+      margin-left: auto;
+      margin-right: auto;
+    }
+
+    h1 {
+      font-size: 1.75rem;
+      font-weight: 700;
+      color: var(--text);
+      margin: 0 0 0.5rem;
+      letter-spacing: -0.02em;
+    }
+
+    h2 {
+      font-size: 1.35rem;
+      font-weight: 600;
+      color: var(--accent);
+      margin: 2.5rem 0 1rem;
+      padding-bottom: 0.35rem;
+      border-bottom: 1px solid var(--border);
+    }
+
+    h3 {
+      font-size: 1.1rem;
+      font-weight: 600;
+      color: var(--text);
+      margin: 1.5rem 0 0.75rem;
+    }
+
+    p {
+      margin: 0 0 1rem;
+      color: var(--text-muted);
+    }
+
+    ul, ol {
+      margin: 0 0 1rem;
+      padding-left: 1.5rem;
+      color: var(--text-muted);
+    }
+
+    li {
+      margin-bottom: 0.35rem;
+    }
+
+    li strong {
+      color: var(--text);
+    }
+
+    hr {
+      border: none;
+      height: 1px;
+      background: var(--border);
+      margin: 2rem 0;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 1rem 0;
+      font-size: 0.95rem;
+      background: var(--bg-card);
+      border-radius: 8px;
+      overflow: hidden;
+      border: 1px solid var(--border);
+    }
+
+    th {
+      text-align: left;
+      padding: 0.75rem 1rem;
+      background: var(--bg-code);
+      color: var(--accent);
+      font-weight: 600;
+    }
+
+    td {
+      padding: 0.65rem 1rem;
+      border-top: 1px solid var(--border);
+      color: var(--text-muted);
+      vertical-align: top;
+    }
+
+    tr:hover td {
+      background: rgba(88, 166, 255, 0.05);
+    }
+
+    td:first-child {
+      color: var(--text);
+      font-weight: 500;
+      min-width: 140px;
+    }
+
+    code, .mono {
+      font-family: 'Consolas', 'Monaco', monospace;
+      font-size: 0.9em;
+      background: var(--bg-code);
+      padding: 0.15em 0.4em;
+      border-radius: 4px;
+      color: var(--accent);
+      border: 1px solid var(--border);
+    }
+
+    .subtitle {
+      color: var(--text-muted);
+      font-size: 0.95rem;
+      margin-bottom: 2rem;
+    }
+
+    .section-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1.25rem 1.5rem;
+      margin-bottom: 1.25rem;
+    }
+
+    .section-card h3 {
+      margin-top: 0;
+    }
+
+    .summary-box {
+      background: var(--accent-soft);
+      border: 1px solid var(--accent);
+      border-radius: 8px;
+      padding: 1rem 1.25rem;
+      margin-top: 2rem;
+    }
+
+    .summary-box ul {
+      margin-bottom: 0;
+    }
+
+    @media (max-width: 640px) {
+      body { padding: 1rem 0.75rem 2rem; }
+      table { font-size: 0.85rem; }
+      th, td { padding: 0.5rem 0.6rem; }
+    }
+  </style>
+</head>
+<body>
+
+  <h1>BotWorkerService – สรุปลำดับขั้นตอนการทำงาน และจุดที่ควรปรับแก้</h1>
+  <p class="subtitle">เอกสารสรุป Flow และข้อเสนอแนะการปรับปรุง</p>
+
+  <h2>1. โครงสร้างภาพรวม</h2>
+  <ul>
+    <li><strong>BackgroundService</strong> ถูก Start/Stop จาก API (BotWorkerController) ไม่รัน loop เอง</li>
+    <li>เมื่อ <strong>Start</strong>: โหลด config จาก DB → Reload order cache → สร้าง Binance WebSocket → Subscribe ราคาแบบ real-time</li>
+    <li>ทุกครั้งที่ได้ <strong>price update</strong> จาก WebSocket จะเรียก <code>ProcessPriceUpdateAsync(price, config)</code></li>
+    <li>ใน ProcessPriceUpdate: <strong>คำนวณว่าจะซื้อหรือไม่</strong> → ถ้าควรซื้อเรียก <code>CheckAndBuyAsync</code> → จากนั้นเรียก <code>CheckAndSellAsync</code> (ขายได้ครั้งละ 1 order)</li>
+  </ul>
+
+  <hr>
+
+  <h2>2. ลำดับขั้นตอนการทำงาน (Flow)</h2>
+
+  <div class="section-card">
+    <h3>2.1 Start (StartAsync)</h3>
+    <ol>
+      <li>ตรวจสอบว่า bot ยังไม่รัน (<code>_isRunning</code>)</li>
+      <li>โหลด config จาก DB (ตาม configId หรือตัวแรก)</li>
+      <li>ตรวจสอบ API_KEY, API_SECRET, SYMBOL</li>
+      <li>เก็บ <code>_currentConfig</code> และโหลด order cache ครั้งแรก (<code>ReloadOrderCacheAsync</code>)</li>
+      <li>สร้าง <code>BinanceSocketClient</code> และ <code>CancellationTokenSource</code></li>
+      <li>Subscribe <code>SpotApi.ExchangeData.SubscribeToTradeUpdatesAsync(symbol, callback)</code></li>
+      <li>ตั้ง <code>_isRunning = true</code> และส่ง Discord LogStart</li>
+    </ol>
+  </div>
+
+  <div class="section-card">
+    <h3>2.2 Stop (StopAsync)</h3>
+    <ol>
+      <li>Cancel <code>_cancellationTokenSource</code></li>
+      <li>Dispose WebSocket client</li>
+      <li>ตั้ง <code>_isRunning = false</code> ล้าง <code>_orderCache</code>, <code>_waitBuyTime</code>, <code>_currentBuyThreshold</code>, <code>_isSold_Price</code></li>
+      <li>ส่ง Discord LogStop และเคลียร์ <code>_currentConfig</code></li>
+    </ol>
+  </div>
+
+  <div class="section-card">
+    <h3>2.3 แต่ละครั้งที่ได้ Price (ProcessPriceUpdateAsync)</h3>
+    <ol>
+      <li><strong>กันซื้อถี่เกิน</strong>: ถ้าเวลาผ่านจาก <code>_lastBuyTime</code> น้อยกว่า <code>_minBuyInterval</code> (2 วินาที) → return</li>
+      <li>สร้าง scope และได้ <code>ApplicationDbContext</code></li>
+      <li><strong>Reload cache (เงื่อนไข)</strong>: ถ้า order ที่ WAITING_SELL ใน cache ≤ 2 → <code>ReloadOrderCacheAsync</code></li>
+      <li>ดึง <code>waitingSellOrders</code> จาก cache (WAITING_SELL, เรียง PriceWaitSell asc, Take 20)</li>
+      <li>ดึง <code>lastActionOrder</code> จาก DB (order ล่าสุดที่มี DateBuy หรือ DateSell เรียงตาม DateSell ?? DateBuy desc)</li>
+      <li>ดึง <code>openSellOrders</code> จาก DB (WAITING_SELL มี PriceWaitSell เรียง asc Take 20)</li>
+      <li><strong>ตัดสินใจว่าจะเช็ก Buy หรือไม่</strong> (<code>shouldCheckBuy</code>, <code>buyThreshold</code>) ตามสถานะ lastActionOrder:
+        <ul>
+          <li><strong>ไม่มี order</strong>: shouldCheckBuy = true, threshold = null (ซื้อได้ทันที)</li>
+          <li><strong>lastAction = SOLD</strong>: คำนวณ threshold จาก <code>CheckBuy_SOLD(PriceSellActual)</code> + เงื่อนไข RunUp / รอ 5 นาที</li>
+          <li><strong>lastAction = Buy (ยังไม่ SOLD)</strong>: คำนวณ threshold จาก <code>CheckBuy_waillsell(PriceBuy)</code> ราคาต้อง ≤ threshold ถึงจะซื้อ</li>
+          <li><strong>lastAction = WAITING_SELL</strong>: ใช้ last SOLD order คำนวณ threshold แบบ SOLD; ถ้าไม่มี SOLD จะไม่ซื้อ</li>
+        </ul>
+      </li>
+      <li>ถ้า <code>_pauseBuyDueToInsufficientBalance</code> → บังคับ shouldCheckBuy = false</li>
+      <li>ถ้า <code>shouldCheckBuy</code> → เรียก <code>CheckAndBuyAsync(context, config, currentPrice, lastActionOrder, openSellOrders)</code></li>
+      <li>เรียก <code>CheckAndSellAsync(context, config, currentPrice)</code> เสมอ (ขายได้ครั้งละ 1 order)</li>
+    </ol>
+  </div>
+
+  <div class="section-card">
+    <h3>2.4 CheckAndBuyAsync (เมื่อระบบตัดสินใจว่าควรซื้อ)</h3>
+    <ol>
+      <li><strong>Lock ซื้อ</strong>: ใน lock อัปเดต <code>_lastBuyTime</code> ก่อน (กันซื้อซ้ำ) ถ้าเพิ่งซื้อไปไม่ถึงช่วงห่าง → return</li>
+      <li>โหลด <code>freshLastActionOrder</code> จาก DB อีกครั้ง (กัน race)</li>
+      <li>ถ้ามี order ที่สร้างภายใน 5 วินาที และ Status = WAITING_SELL → return (กันซื้อซ้ำ)</li>
+      <li>คำนวณ <code>threshold</code> ตามสถานะ freshLastActionOrder (null / SOLD / Buy / WAITING_SELL)</li>
+      <li>เช็ก RunUp: ถ้าราคา > threshold และไม่เข้าเงื่อนไข RunUp → return</li>
+      <li>สร้าง Binance client; ตรวจสอบ BuyAmountUSD</li>
+      <li><strong>Margin Cross</strong>: ถ้า <code>config.UseMarginCross</code> → ดึง margin account; ถ้า Margin Level ≤ 1.4 → ส่ง Discord Margin Alert + Stop bot + return</li>
+      <li><strong>Spot เท่านั้น</strong>: เช็กยอด USDT; ถ้าไม่พอ → ตั้ง <code>_pauseBuyDueToInsufficientBalance</code> + Discord + return (ไม่ Stop)</li>
+      <li>วางคำสั่งซื้อ:
+        <ul>
+          <li><strong>Margin Cross</strong>: <code>PlaceMarginOrderAsync(..., MARGIN_BUY)</code> (HTTP signed); ลองซ้ำ 1 ครั้งถ้าล้ม</li>
+          <li><strong>Spot</strong>: <code>SpotApi.Trading.PlaceOrderAsync</code> (Market, quoteQuantity); ลองซ้ำ 1 ครั้ง</li>
+        </ul>
+      </li>
+      <li>สร้าง DbOrder (OrderBuyID, PriceBuy, PriceWaitSell = currentPrice + PERCEN_SELL%, CoinQuantity) บันทึก DB</li>
+      <li>อัปเดต cache และส่ง Discord LogBuy</li>
+    </ol>
+  </div>
+
+  <div class="section-card">
+    <h3>2.5 CheckAndSellAsync</h3>
+    <ol>
+      <li>ใช้ <code>_sellSemaphore.WaitAsync(0)</code> กันขายพร้อมกันหลายตัว (ได้แล้วต้อง Release ใน finally)</li>
+      <li><strong>Margin Cross</strong>: ถ้า <code>config.UseMarginCross</code> และ <code>!_isRunning</code> → Start bot แล้ว return (รอรอบถัดไปค่อยขาย)</li>
+      <li>กันขายถี่: ถ้าเวลาจาก <code>_lastSellTime</code> &lt; _minSellInterval → return</li>
+      <li>เลือก order ที่จะขาย: จาก cache ที่ WAITING_SELL และ currentPrice >= PriceWaitSell เรียง PriceWaitSell asc ตัวแรก; ถ้าไม่มีใน cache → โหลดจาก DB (fallback)</li>
+      <li>โหลด dbOrder จาก DB; ถ้าไม่มีหรือ Status != WAITING_SELL → ลบออกจาก cache (ถ้ามี) แล้ว return</li>
+      <li>คำนวณ <code>coinQuantityToSell</code> จาก dbOrder (CoinQuantity ?? Quantity); ถ้า ≤ 0 → ForceMarkOrderAsSold หรือ Discord ตามกรณี</li>
+      <li>ถ้าเป็น <strong>order รอขายตัวสุดท้าย</strong> (waitingSellCount ≤ 1): โหลด balance (Spot) ปรับ quantity ให้ไม่เกินยอดที่มี</li>
+      <li>วางคำสั่งขาย:
+        <ul>
+          <li><strong>Margin Cross</strong>: <code>PlaceMarginOrderAsync(..., AUTO_REPAY)</code> ใช้ quantity</li>
+          <li><strong>Spot</strong>: <code>SpotApi.Trading.PlaceOrderAsync</code> Market sell ใช้ quantity</li>
+        </ul>
+      </li>
+      <li>ถ้าสั่งขายล้ม: กรณี last order + IsQuantityTooLowError → ForceMarkOrderAsSold; ไม่ใช่แล้ว → Discord error แล้ว return</li>
+      <li>โหลด freshDbOrder อีกครั้ง; ถ้า status เปลี่ยนไปแล้ว (ขายไปแล้ว) → Discord conflict แล้ว return</li>
+      <li>อัปเดต freshDbOrder (OrderSellID, PriceSellActual, DateSell, Status=SOLD, ProfitLoss); SaveChanges</li>
+      <li>ลบออกจาก cache อัปเดต _lastSellTime; ถ้าเคย pause เพราะยอดไม่พอ → ปลด _pauseBuyDueToInsufficientBalance; ส่ง Discord LogSell</li>
+    </ol>
+  </div>
+
+  <div class="section-card">
+    <h3>2.6 คำนวณจุดซื้อ (Threshold)</h3>
+    <ul>
+      <li><strong>CheckBuy_SOLD(lastActionSOLD)</strong>: ใช้ order WAITING_SELL ที่มี PriceWaitSell above/below ค่าขายอ้างอิง หา topPriceSell / bottomPriceSell คำนวณจุดกึ่งกลางและเปอร์เซ็นต์; วน loop ปรับ future_Sell และอัปเดต _isSold_Price จนได้ NexBuy_Final</li>
+      <li><strong>CheckBuy_waillsell(lastActionBuy)</strong>: ดู 3 order ล่าสุดว่ามี SOLD หรือไม่; คำนวณแบบคล้าย SOLD (top/bottom PriceWaitSell) เพื่อหาจุดซื้อถัดไป</li>
+    </ul>
+  </div>
+
+  <div class="section-card">
+    <h3>2.7 Margin</h3>
+    <ul>
+      <li><strong>PlaceMarginOrderAsync</strong>: สร้าง query (symbol, side, type=MARKET, sideEffectType=MARGIN_BUY หรือ AUTO_REPAY, quoteOrderQty หรือ quantity), sign HMAC-SHA256, POST ไป Binance /sapi/v1/margin/order</li>
+      <li>ซื้อ Margin: sideEffectType = MARGIN_BUY</li>
+      <li>ขาย Margin: sideEffectType = AUTO_REPAY (ขายแล้วชำระหนี้)</li>
+    </ul>
+  </div>
+
+  <hr>
+
+  <h2>3. จุดที่ควรสังเกตและประเมินการปรับแก้</h2>
+
+  <h3>3.1 ความถูกต้องและความปลอดภัย</h3>
+  <table>
+    <thead>
+      <tr><th>จุด</th><th>รายละเอียด</th><th>คำแนะนำ</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Margin Level 1.4</td>
+        <td>ค่า 1.4 ตายตัวในโค้ด</td>
+        <td>พิจารณาออกเป็น config (เช่น MinMarginLevelForBuy) หรือใส่ใน DbSetting</td>
+      </tr>
+      <tr>
+        <td>RefreshConfigFromDb</td>
+        <td>หลัง SwitchTradingMode จะ refresh แค่ config ที่ส่งมา</td>
+        <td>ถ้า bot รันด้วย config อื่น ต้องให้ controller ส่ง configId ที่ตรงกับ _currentConfig.Id</td>
+      </tr>
+      <tr>
+        <td>Margin เมื่อไม่มี IHttpClientFactory</td>
+        <td>ถ้า DI ไม่ส่ง IHttpClientFactory มา PlaceMarginOrder จะ fail</td>
+        <td>ตรวจสอบ Program.cs / DI ว่า BotWorkerService ได้รับ IHttpClientFactory จริงเมื่อใช้ Margin</td>
+      </tr>
+      <tr>
+        <td>StopAsync recursion</td>
+        <td><code>public override async Task StopAsync(CancellationToken)</code> เรียก <code>await StopAsync()</code> (ไม่มี argument) ซึ่งเป็น method เดิม อาจเกิด stack / infinite loop ได้ในบางกรณี</td>
+        <td>เปลี่ยนเป็นเรียก logic stop แยก (เช่น private DoStopAsync()) หรือให้ override เรียก base แล้วเรียก internal stop แค่ครั้งเดียว</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3>3.2 Race / Lock</h3>
+  <table>
+    <thead>
+      <tr><th>จุด</th><th>รายละเอียด</th><th>คำแนะนำ</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>_lastBuyTime</td>
+        <td>อัปเดตก่อนวาง order จริง ถ้าวาง order ล้มเหลวเวลาไม่ถูกรีเซ็ต</td>
+        <td>ถ้าต้องการให้ "ซื้อไม่สำเร็จแล้วลองใหม่ได้เร็ว" อาจพิจารณาย้ายการอัปเดต _lastBuyTime ไปหลัง place order สำเร็จ (แลกกับความเสี่ยงซื้อซ้ำถ้า API ช้า)</td>
+      </tr>
+      <tr>
+        <td>_orderCache กับ DB</td>
+        <td>มีทั้ง cache และ fallback อ่าน DB โดยตรง อาจมีช่วงที่ cache กับ DB ไม่ตรง</td>
+        <td>พิจารณาให้มี "แหล่งความจริง" เดียว (เช่น อ่าน DB แล้วอัปเดต cache ทุกครั้ง) หรือกำหนดชัดว่า cache ใช้เมื่อไหร่และเมื่อไหร่ต้อง reload</td>
+      </tr>
+      <tr>
+        <td>ReloadOrderCacheAsync</td>
+        <td>เงื่อนไข reload คือ WAITING_SELL ใน cache ≤ 2</td>
+        <td>อาจทำให้ reload บ่อยเมื่อมี order น้อย; ถ้า order เยอะ cache อาจไม่ถูก reload เมื่อมี order ถูกขายไปแล้ว (ลบจาก DB) จนกว่าจะเหลือ ≤ 2 ใน cache</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3>3.3 Margin / Balance</h3>
+  <table>
+    <thead>
+      <tr><th>จุด</th><th>รายละเอียด</th><th>คำแนะนำ</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Sell balance (Margin)</td>
+        <td>ตอนขาย Margin ยังใช้ <code>restClient.SpotApi.Account.GetAccountInfoAsync()</code> สำหรับ last order เพื่อปรับ quantity</td>
+        <td>ในโหมด Margin ควรใช้ margin account / cross margin balance แทน spot balance เพื่อความถูกต้อง</td>
+      </tr>
+      <tr>
+        <td>Margin buy ไม่เช็กยอด</td>
+        <td>โหมด Margin Cross ไม่เช็ก USDT ก่อนซื้อ (ใช้ margin ได้)</td>
+        <td>สอดคล้องกับดีไซน์; แนะนำให้มี alert หรือ log เมื่อ margin level ต่ำ (เช่น น้อยกว่า 2.0) เพื่อเตือนล่วงหน้า</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3>3.4 Error / Edge case</h3>
+  <table>
+    <thead>
+      <tr><th>จุด</th><th>รายละเอียด</th><th>คำแนะนำ</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>PlaceMarginOrderAsync ล้ม</td>
+        <td>คืน (false, 0, 0, 0, body) ไม่แยกประเภท error</td>
+        <td>พิจารณา parse error code จาก Binance (เช่น -2010, -1111) เพื่อ retry / alert / log แยกประเภท</td>
+      </tr>
+      <tr>
+        <td>CheckBuy_SOLD / CheckBuy_waillsell</td>
+        <td>ใช้ <code>.AsEnumerable()</code> แล้ว OrderBy ใน memory</td>
+        <td>ข้อมูลเยอะอาจกิน memory; ถ้า DB รองรับ decimal ORDER BY ได้ควรย้ายไปที่ DB</td>
+      </tr>
+      <tr>
+        <td>test = false</td>
+        <td>flag ในฟิลด์ <code>test</code> ใช้ปิดการวาง order จริง</td>
+        <td>ควรย้ายเป็น config หรือ environment (เช่น TestMode) ไม่ควร hardcode ใน service</td>
+      </tr>
+      <tr>
+        <td>ReloadOrderCacheAsync ล้ม</td>
+        <td>catch แล้วไม่ log (silent failure)</td>
+        <td>อย่างน้อย log warning เพื่อ debug ได้เมื่อ cache ผิดปกติ</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3>3.5 โครงสร้างและบำรุงรักษา</h3>
+  <table>
+    <thead>
+      <tr><th>จุด</th><th>รายละเอียด</th><th>คำแนะนำ</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>ProcessPriceUpdateAsync ยาว</td>
+        <td>มีทั้งโหลด cache, DB, คำนวณ threshold หลายแบบ, เรียก Buy/Sell ใน method เดียว</td>
+        <td>แยกเป็น private method ตามหน้าที่ (เช่น DetermineBuyThreshold, ShouldCheckBuy, ReloadCacheIfNeeded) จะอ่านและเทสง่ายขึ้น</td>
+      </tr>
+      <tr>
+        <td>CheckBuy_SOLD / CheckBuy_waillsell</td>
+        <td>logic ค่อนข้างซับซ้อน มี while loop และ state _isSold_Price</td>
+        <td>เพิ่ม comment สรุปสูตรและตัวอย่างตัวเลข หรือแยกเป็น strategy/helper class พร้อม unit test</td>
+      </tr>
+      <tr>
+        <td>Magic number</td>
+        <td>5 วินาที (recent order), 5 นาที (wait buy), 2 วินาที (min buy interval), 1 วินาที (min sell interval), 20 (take orders)</td>
+        <td>ย้ายเป็น constants หรือ config เพื่อปรับพฤติกรรมได้โดยไม่แก้โค้ด</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <hr>
+
+  <h2>4. สรุปสั้นๆ</h2>
+  <div class="summary-box">
+    <ul>
+      <li><strong>Flow หลัก</strong>: Start → WebSocket price → ProcessPriceUpdate → (ควรซื้อไหม → CheckAndBuy) → CheckAndSell (ครั้งละ 1 order)</li>
+      <li><strong>โหมด Spot</strong>: เช็กยอด USDT ก่อนซื้อ; ยอดไม่พอ = pause buy (ไม่ Stop bot)</li>
+      <li><strong>โหมด Margin Cross</strong>: เช็ก Margin Level > 1.4 ก่อนซื้อ; ไม่ถึง = Stop + Alert; ขายใช้ AUTO_REPAY; ถ้า bot Stop อยู่จะ Start ก่อนแล้วค่อยขายในรอบถัดไป</li>
+      <li><strong>จุดที่ควรแก้ก่อน</strong>: (1) override StopAsync กัน recursion (2) ตรวจสอบ DI สำหรับ IHttpClientFactory เมื่อใช้ Margin (3) พิจารณาใช้ margin account balance ตอนขายโหมด Margin (4) ย้าย magic numbers และ test flag เป็น config/constants</li>
+    </ul>
+  </div>
+
+</body>
+</html>
