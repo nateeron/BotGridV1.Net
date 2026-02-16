@@ -24,7 +24,9 @@ builder.Services.AddCors(options =>
             "http://localhost:5173",
             "http://localhost:5174",
             "https://report.cayoshibot.com",
-            "http://localhost:2000"
+            "http://localhost:2000",
+            "http://127.0.0.1:5500",
+            "https://reportmagin.cayoshibot.com"
         )
         .AllowAnyHeader()
         .AllowAnyMethod()
