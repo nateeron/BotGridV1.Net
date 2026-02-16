@@ -41,6 +41,10 @@ namespace BotGridV1.Models.SQLite
 
         [Column("BuyAmountUSD", TypeName = "decimal(18,2)")]
         public decimal? BuyAmountUSD { get; set; } // จำนวนเงินซื้อขาย (USD)
+
+        /// <summary>true = Open orders with Margin Cross; false = Spot (default)</summary>
+        [Column("UseMarginCross")]
+        public bool UseMarginCross { get; set; }
     }
     public class req_GetById
     {

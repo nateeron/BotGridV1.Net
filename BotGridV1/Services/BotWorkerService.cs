@@ -1,3 +1,6 @@
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
 using BotGridV1.Models.SQLite;
 using Binance.Net.Clients;
 using Binance.Net.Enums;
@@ -77,11 +80,16 @@ namespace BotGridV1.Services
             _logger.LogInformation("Buy pause due to insufficient balance has been manually reset.");
         }
 
-        public BotWorkerService(IServiceProvider serviceProvider, ILogger<BotWorkerService> logger, DiscordService? discordService = null)
+        private readonly IHttpClientFactory? _httpClientFactory;
+        private const string BinanceMarginBaseUrl = "https://api.binance.com";
+        private const decimal MarginLevelMinForBuy = 1.4m;
+
+        public BotWorkerService(IServiceProvider serviceProvider, ILogger<BotWorkerService> logger, DiscordService? discordService = null, IHttpClientFactory? httpClientFactory = null)
         {
             _serviceProvider = serviceProvider;
             _logger = logger;
             _discordService = discordService;
+            _httpClientFactory = httpClientFactory;
         }
 
         public void SetBuyPauseState(bool pause)
@@ -200,6 +208,25 @@ namespace BotGridV1.Services
                 return false;
             }
         }
+        /// <summary>Reload current config from DB (e.g. after SwitchTradingMode). No-op if bot not running.</summary>
+        public async Task RefreshConfigFromDbAsync(int configId)
+        {
+            if (!_isRunning)
+                return;
+            try
+            {
+                using var scope = _serviceProvider.CreateScope();
+                var context = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+                var fresh = await context.DbSettings.FindAsync(configId);
+                if (fresh != null)
+                    _currentConfig = fresh;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "RefreshConfigFromDb failed for ConfigId {ConfigId}", configId);
+            }
+        }
+
         public async Task StopAsync()
         {
             if (!_isRunning)
@@ -659,46 +686,67 @@ namespace BotGridV1.Services
 
                 var buyAmountUSD = config.BuyAmountUSD.Value;
 
-                // Check account balance
-                // ตรวจสอบยอดคงเหลือในบัญชี
-                var accountInfo = await restClient.SpotApi.Account.GetAccountInfoAsync();
-                if (!accountInfo.Success)
+                // Margin Cross: before buy, require margin level > 1.4; else stop and alert
+                // 1.2 Condition Buy ก่อนเปิดให้เช็ก Swich on Magincross และ คำนวน Margin level > 1.4 ถึงจะ Open Buy
+                if (config.UseMarginCross)
                 {
-                    // Alert to Discord only (no logging to save RAM/CPU)
-                    // แจ้งเตือนไปยัง Discord เท่านั้น (ไม่ log เพื่อประหยัด RAM/CPU)
-                    if (_discordService != null)
+                    var marginAccount = await restClient.SpotApi.Account.GetMarginAccountInfoAsync();
+                    decimal? marginLevel = marginAccount.Success ? marginAccount.Data.MarginLevel : null;
+                    if (!marginLevel.HasValue || marginLevel.Value <= MarginLevelMinForBuy)
                     {
-                        await _discordService.LogErrorAsync(
-                            config.DisCord_Hook1,
-                            config.DisCord_Hook2,
-                            $"Failed to get account info for {symbol}",
-                            accountInfo.Error?.Message ?? "Unknown error"
-                        );
+                        if (_discordService != null)
+                        {
+                            await _discordService.LogMarginLevelAlertAsync(
+                                config.DisCord_Hook1,
+                                config.DisCord_Hook2,
+                                marginLevel,
+                                $"Margin level {(marginLevel.HasValue ? marginLevel.Value.ToString("F4") : "N/A")} <= {MarginLevelMinForBuy}. Bot stopped. No buy until level > {MarginLevelMinForBuy}.",
+                                symbol,
+                                config.Id.ToString()
+                            );
+                        }
+                        await StopAsync();
+                        return;
                     }
-                    return;
                 }
 
-                var usdtBalance = accountInfo.Data.Balances.FirstOrDefault(b => b.Asset == "USDT");
-                if (usdtBalance == null || usdtBalance.Available < buyAmountUSD)
+                // Check account balance (Spot only; Margin Cross does not stop when balance insufficient - 1.4)
+                // ตรวจสอบยอดคงเหลือในบัญชี
+                if (!config.UseMarginCross)
                 {
-                    _logger.LogWarning($"Insufficient USDT balance. Required: {buyAmountUSD}, Available: {usdtBalance?.Available ?? 0}");
-
-                    // Pause buy logic until next successful sell
-                    _pauseBuyDueToInsufficientBalance = true;
-
-                    if (_discordService != null)
+                    var accountInfo = await restClient.SpotApi.Account.GetAccountInfoAsync();
+                    if (!accountInfo.Success)
                     {
-                        await _discordService.LogErrorAsync(
-                            config.DisCord_Hook1,
-                            config.DisCord_Hook2,
-                            $"Insufficient USDT balance - Stopping bot for {symbol}",
-                            $"Required: {buyAmountUSD}, Available: {usdtBalance?.Available ?? 0}"
-                        );
+                        if (_discordService != null)
+                        {
+                            await _discordService.LogErrorAsync(
+                                config.DisCord_Hook1,
+                                config.DisCord_Hook2,
+                                $"Failed to get account info for {symbol}",
+                                accountInfo.Error?.Message ?? "Unknown error"
+                            );
+                        }
+                        return;
                     }
-                    // Stop the bot when balance is insufficient
-                    // หยุด Bot เมื่อยอดไม่พอ
-                    //  await StopAsync();
-                    return;
+
+                    var usdtBalance = accountInfo.Data.Balances.FirstOrDefault(b => b.Asset == "USDT");
+                    if (usdtBalance == null || usdtBalance.Available < buyAmountUSD)
+                    {
+                        _logger.LogWarning($"Insufficient USDT balance. Required: {buyAmountUSD}, Available: {usdtBalance?.Available ?? 0}");
+
+                        _pauseBuyDueToInsufficientBalance = true;
+
+                        if (_discordService != null)
+                        {
+                            await _discordService.LogErrorAsync(
+                                config.DisCord_Hook1,
+                                config.DisCord_Hook2,
+                                $"Insufficient USDT balance - Stopping bot for {symbol}",
+                                $"Required: {buyAmountUSD}, Available: {usdtBalance?.Available ?? 0}"
+                            );
+                        }
+                        return;
+                    }
                 }
 
                 // Calculate coin quantity from USD amount
@@ -706,81 +754,91 @@ namespace BotGridV1.Services
                 // var quantity = CalculateCoinQuantity(buyAmountUSD, currentPrice, symbol);
                 if (!test)
                 {
+                    long buyOrderId;
+                    decimal actualCoinQuantity;
 
-
-                    // Place market buy order
-                    // วางคำสั่งซื้อในตลาด
-                    var buyOrder = await restClient.SpotApi.Trading.PlaceOrderAsync(
-                        symbol: symbol,
-                        side: OrderSide.Buy,
-                        type: SpotOrderType.Market,
-                        quoteQuantity: buyAmountUSD);
-
-                    if (!buyOrder.Success)
+                    if (config.UseMarginCross && _httpClientFactory != null)
                     {
-                        // Alert to Discord only (no logging to save RAM/CPU)
-                        // แจ้งเตือนไปยัง Discord เท่านั้น (ไม่ log เพื่อประหยัด RAM/CPU)
-                        if (_discordService != null)
+                        // Margin Cross buy (MARGIN_BUY)
+                        var marginBuy = await PlaceMarginOrderAsync(config, symbol, isBuy: true, buyAmountUSD);
+                        if (!marginBuy.success)
                         {
-                            await _discordService.LogBuyNotSuccessAsync(
-                                config.DisCord_Hook1,
-                                config.DisCord_Hook2,
-                                symbol,
-                                buyOrder.Error?.Message ?? "Unknown error",
-                                0
-                            );
-                        }
-
-                        // Retry buy logic - wait a bit and try again
-                        // ลอจิกการซื้อซ้ำ - รอสักครู่แล้วลองอีกครั้ง
-                        await Task.Delay(1000); // Wait 1 second before retry
-
-                        // Log Buy Retry to Discord
-                        if (_discordService != null)
-                        {
-                            await _discordService.LogBuyRetryAsync(
-                                config.DisCord_Hook1,
-                                config.DisCord_Hook2,
-                                symbol,
-                                currentPrice,
-                                1,
-                                buyOrder.Error?.Message ?? "Retrying after failure"
-                            );
-                        }
-
-                        // Retry the buy order once
-                        var retryBuyOrder = await restClient.SpotApi.Trading.PlaceOrderAsync(
-                            symbol: symbol,
-                            side: OrderSide.Buy,
-                            type: SpotOrderType.Market,
-                            quoteQuantity: buyAmountUSD);
-
-                        if (!retryBuyOrder.Success)
-                        {
-                            // Alert to Discord only (no logging to save RAM/CPU)
-                            // แจ้งเตือนไปยัง Discord เท่านั้น (ไม่ log เพื่อประหยัด RAM/CPU)
                             if (_discordService != null)
                             {
                                 await _discordService.LogBuyNotSuccessAsync(
                                     config.DisCord_Hook1,
                                     config.DisCord_Hook2,
                                     symbol,
-                                    retryBuyOrder.Error?.Message ?? "Retry failed",
-                                    1
+                                    marginBuy.error ?? "Unknown error",
+                                    0
                                 );
                             }
-                            return;
+                            await Task.Delay(1000);
+                            var retry = await PlaceMarginOrderAsync(config, symbol, isBuy: true, buyAmountUSD);
+                            if (!retry.success)
+                            {
+                                if (_discordService != null)
+                                    await _discordService.LogBuyNotSuccessAsync(config.DisCord_Hook1, config.DisCord_Hook2, symbol, retry.error ?? "Retry failed", 1);
+                                return;
+                            }
+                            buyOrderId = retry.orderId;
+                            actualCoinQuantity = retry.executedQty > 0 ? retry.executedQty : retry.origQty;
                         }
-
-                        // Use retry order if successful
-                        buyOrder = retryBuyOrder;
+                        else
+                        {
+                            buyOrderId = marginBuy.orderId;
+                            actualCoinQuantity = marginBuy.executedQty > 0 ? marginBuy.executedQty : marginBuy.origQty;
+                        }
                     }
+                    else
+                    {
+                        // Spot buy
+                        var buyOrder = await restClient.SpotApi.Trading.PlaceOrderAsync(
+                            symbol: symbol,
+                            side: OrderSide.Buy,
+                            type: SpotOrderType.Market,
+                            quoteQuantity: buyAmountUSD);
 
-                    // Get actual coin quantity from buy order response
-                    // รับจำนวน Coin จริงจากคำตอบคำสั่งซื้อ
-                    var actualCoinQuantity = buyOrder.Data.QuantityFilled > 0
-                        ? buyOrder.Data.QuantityFilled
-                        : buyOrder.Data.Quantity;
+                        if (!buyOrder.Success)
+                        {
+                            if (_discordService != null)
+                            {
+                                await _discordService.LogBuyNotSuccessAsync(
+                                    config.DisCord_Hook1,
+                                    config.DisCord_Hook2,
+                                    symbol,
+                                    buyOrder.Error?.Message ?? "Unknown error",
+                                    0
+                                );
+                            }
+                            await Task.Delay(1000);
+                            if (_discordService != null)
+                            {
+                                await _discordService.LogBuyRetryAsync(
+                                    config.DisCord_Hook1,
+                                    config.DisCord_Hook2,
+                                    symbol,
+                                    currentPrice,
+                                    1,
+                                    buyOrder.Error?.Message ?? "Retrying after failure"
+                                );
+                            }
+                            var retryBuyOrder = await restClient.SpotApi.Trading.PlaceOrderAsync(
+                                symbol: symbol,
+                                side: OrderSide.Buy,
+                                type: SpotOrderType.Market,
+                                quoteQuantity: buyAmountUSD);
+                            if (!retryBuyOrder.Success)
+                            {
+                                if (_discordService != null)
+                                    await _discordService.LogBuyNotSuccessAsync(config.DisCord_Hook1, config.DisCord_Hook2, symbol, retryBuyOrder.Error?.Message ?? "Retry failed", 1);
+                                return;
+                            }
+                            buyOrder = retryBuyOrder;
+                        }
+                        buyOrderId = buyOrder.Data.Id;
+                        actualCoinQuantity = buyOrder.Data.QuantityFilled > 0 ? buyOrder.Data.QuantityFilled : buyOrder.Data.Quantity;
+                    }
 
                     // Calculate sell price with PERCEN_SELL
                     // คำนวณราคาขายด้วย PERCEN_SELL
@@ -791,7 +849,7 @@ namespace BotGridV1.Services
                     var dbOrder = new DbOrder
                     {
                         Timestamp = DateTime.UtcNow,
-                        OrderBuyID = buyOrder.Data.Id.ToString(),
+                        OrderBuyID = buyOrderId.ToString(),
                         PriceBuy = currentPrice,
                         PriceWaitSell = sellPrice,
                         DateBuy = DateTime.UtcNow,
@@ -826,7 +884,7 @@ namespace BotGridV1.Services
                         });
                     }
 
-                    _logger.LogInformation($"Buy order placed: {buyOrder.Data.Id} at {currentPrice}, Sell target: {sellPrice}");
+                    _logger.LogInformation($"Buy order placed: {buyOrderId} at {currentPrice}, Sell target: {sellPrice}");
 
                     // Log Buy Success to Discord
                     if (_discordService != null)
@@ -838,7 +896,7 @@ namespace BotGridV1.Services
                             currentPrice,
                             actualCoinQuantity,
                             buyAmountUSD,
-                            buyOrder.Data.Id.ToString()
+                            buyOrderId.ToString()
                         );
                     }
                 }
@@ -868,6 +926,13 @@ namespace BotGridV1.Services
                 if (!semaphoreAcquired)
                 {
                     return; // Another sell is in progress, skip to avoid duplicate processing
+                }
+
+                // 1.3 Margin Cross: if system is stopped, start it so sell can run
+                if (config.UseMarginCross && !_isRunning)
+                {
+                    await StartAsync(config.Id);
+                    return;
                 }
 
                 if (_lastSellTime != DateTime.MinValue && DateTime.UtcNow - _lastSellTime < _minSellInterval)
@@ -1028,17 +1093,33 @@ namespace BotGridV1.Services
                 }
                 if (!test)
                 {
+                    long sellOrderId;
+                    bool sellSuccess;
+                    string? sellError = null;
 
-
-                    var sellOrder = await restClient.SpotApi.Trading.PlaceOrderAsync(
-                        symbol: symbol,
-                        side: OrderSide.Sell,
-                        type: SpotOrderType.Market,
-                        quantity: coinQuantityToSell);
-
-                    if (!sellOrder.Success)
+                    if (config.UseMarginCross && _httpClientFactory != null)
                     {
-                        if (isLastWaitingOrder && IsQuantityTooLowError(sellOrder.Error?.Message))
+                        // Margin Cross sell with AUTO_REPAY (ขายพร้อมชำระหนี้)
+                        var marginSell = await PlaceMarginOrderAsync(config, symbol, isBuy: false, 0, quantity: coinQuantityToSell);
+                        sellSuccess = marginSell.success;
+                        sellOrderId = marginSell.orderId;
+                        sellError = marginSell.error;
+                    }
+                    else
+                    {
+                        var sellOrder = await restClient.SpotApi.Trading.PlaceOrderAsync(
+                            symbol: symbol,
+                            side: OrderSide.Sell,
+                            type: SpotOrderType.Market,
+                            quantity: coinQuantityToSell);
+                        sellSuccess = sellOrder.Success;
+                        sellOrderId = sellSuccess ? sellOrder.Data.Id : 0;
+                        sellError = sellOrder.Error?.Message;
+                    }
+
+                    if (!sellSuccess)
+                    {
+                        if (isLastWaitingOrder && IsQuantityTooLowError(sellError))
                         {
                             var forcedOrder = await context.DbOrders.FindAsync(orderToSell.Id);
                             if (forcedOrder != null)
@@ -1049,7 +1130,7 @@ namespace BotGridV1.Services
                                     config,
                                     currentPrice,
                                     coinQuantityToSell,
-                                    $"Forced close: Binance rejected final sell order due to quantity constraint ({sellOrder.Error?.Message ?? "unknown reason"})."
+                                    $"Forced close: Binance rejected final sell order due to quantity constraint ({sellError ?? "unknown reason"})."
                                 );
                             }
                         }
@@ -1059,7 +1140,7 @@ namespace BotGridV1.Services
                                 config.DisCord_Hook1,
                                 config.DisCord_Hook2,
                                 $"Sell order failed for {symbol}",
-                                sellOrder.Error?.Message ?? "Unknown error"
+                                sellError ?? "Unknown error"
                             );
                         }
                         return;
@@ -1074,7 +1155,7 @@ namespace BotGridV1.Services
                                 config.DisCord_Hook1,
                                 config.DisCord_Hook2,
                                 $"Sell order conflict for {symbol}",
-                                $"Order {orderToSell.Id} was already sold. Binance Order ID: {sellOrder.Data.Id}"
+                                $"Order {orderToSell.Id} was already sold. Binance Order ID: {sellOrderId}"
                             );
                         }
                         return;
@@ -1082,7 +1163,7 @@ namespace BotGridV1.Services
 
                     try
                     {
-                        freshDbOrder.OrderSellID = sellOrder.Data.Id.ToString();
+                        freshDbOrder.OrderSellID = sellOrderId.ToString();
                         freshDbOrder.PriceSellActual = currentPrice;
                         freshDbOrder.DateSell = DateTime.UtcNow;
                         freshDbOrder.Status = "SOLD";
@@ -1105,7 +1186,7 @@ namespace BotGridV1.Services
 
                             _lastSellTime = DateTime.UtcNow;
 
-                            _logger.LogInformation($"Sell order executed: {sellOrder.Data.Id} at {currentPrice}, Profit: {freshDbOrder.ProfitLoss}");
+                            _logger.LogInformation($"Sell order executed: {sellOrderId} at {currentPrice}, Profit: {freshDbOrder.ProfitLoss}");
 
                             if (_pauseBuyDueToInsufficientBalance)
                             {
@@ -1122,7 +1203,7 @@ namespace BotGridV1.Services
                                     currentPrice,
                                     coinQuantityToSell,
                                     freshDbOrder.ProfitLoss,
-                                    sellOrder.Data.Id.ToString()
+                                    sellOrderId.ToString()
                                 );
                             }
                         }
@@ -1134,7 +1215,7 @@ namespace BotGridV1.Services
                                     config.DisCord_Hook1,
                                     config.DisCord_Hook2,
                                     $"Failed to save sell order for {symbol}",
-                                    $"Order {orderToSell.Id} - Binance Order ID: {sellOrder.Data.Id}, Save result: {saveResult}"
+                                    $"Order {orderToSell.Id} - Binance Order ID: {sellOrderId}, Save result: {saveResult}"
                                 );
                             }
                         }
@@ -1148,7 +1229,7 @@ namespace BotGridV1.Services
                                 config.DisCord_Hook1,
                                 config.DisCord_Hook2,
                                 $"Error saving sell order for {symbol}",
-                                $"Order {orderToSell.Id} - Binance Order ID: {sellOrder.Data.Id}, Error: {saveEx.Message}"
+                                $"Order {orderToSell.Id} - Binance Order ID: {sellOrderId}, Error: {saveEx.Message}"
                             );
                         }
                     }
@@ -1541,6 +1622,76 @@ namespace BotGridV1.Services
             {
                 options.ApiCredentials = new ApiCredentials(config.API_KEY!, config.API_SECRET!);
             });
+        }
+
+        /// <summary>Place cross margin order (buy: MARGIN_BUY, sell: AUTO_REPAY). Returns (success, orderId, executedQty, origQty, error).</summary>
+        private async Task<(bool success, long orderId, decimal executedQty, decimal origQty, string? error)> PlaceMarginOrderAsync(
+            DbSetting config, string symbol, bool isBuy, decimal quoteOrderQty, decimal? quantity = null)
+        {
+            if (string.IsNullOrEmpty(config.API_KEY) || string.IsNullOrEmpty(config.API_SECRET) || _httpClientFactory == null)
+                return (false, 0, 0, 0, "Margin order: API key or HttpClientFactory missing");
+
+            var timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            var sideEffectType = isBuy ? "MARGIN_BUY" : "AUTO_REPAY";
+            var query = new List<string>
+            {
+                $"symbol={Uri.EscapeDataString(symbol)}",
+                $"side={(isBuy ? "BUY" : "SELL")}",
+                "type=MARKET",
+                $"sideEffectType={sideEffectType}",
+                $"timestamp={timestamp}"
+            };
+            if (isBuy)
+                query.Add($"quoteOrderQty={quoteOrderQty.ToString(System.Globalization.CultureInfo.InvariantCulture)}");
+            else if (quantity.HasValue)
+                query.Add($"quantity={quantity.Value.ToString(System.Globalization.CultureInfo.InvariantCulture)}");
+
+            var queryString = string.Join("&", query);
+            var signature = SignHmacSha256(config.API_SECRET!, queryString);
+            var url = $"{BinanceMarginBaseUrl}/sapi/v1/margin/order?{queryString}&signature={signature}";
+
+            var httpClient = _httpClientFactory.CreateClient();
+            using var request = new HttpRequestMessage(HttpMethod.Post, url);
+            request.Headers.Add("X-MBX-APIKEY", config.API_KEY);
+            request.Content = new StringContent("", Encoding.UTF8, "application/x-www-form-urlencoded");
+
+            var response = await httpClient.SendAsync(request);
+            var body = await response.Content.ReadAsStringAsync();
+            if (!response.IsSuccessStatusCode)
+                return (false, 0, 0, 0, body ?? response.ReasonPhrase);
+
+            try
+            {
+                using var doc = JsonDocument.Parse(body);
+                var root = doc.RootElement;
+                var orderId = root.TryGetProperty("orderId", out var o) ? o.GetInt64() : 0;
+                var executedQty = root.TryGetProperty("executedQty", out var eq) ? ParseDecimal(eq) : 0;
+                var origQty = root.TryGetProperty("origQty", out var oq) ? ParseDecimal(oq) : (root.TryGetProperty("origQuoteOrderQty", out var oqq) ? ParseDecimal(oqq) : 0);
+                return (true, orderId, executedQty, origQty, null);
+            }
+            catch
+            {
+                return (false, 0, 0, 0, body);
+            }
+        }
+
+        private static decimal ParseDecimal(JsonElement el)
+        {
+            if (el.ValueKind == JsonValueKind.String)
+            {
+                var s = el.GetString();
+                return decimal.TryParse(s, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var v) ? v : 0;
+            }
+            if (el.ValueKind == JsonValueKind.Number)
+                return el.GetDecimal();
+            return 0;
+        }
+
+        private static string SignHmacSha256(string secret, string message)
+        {
+            using var hmac = new HMACSHA256(Encoding.UTF8.GetBytes(secret));
+            var hash = hmac.ComputeHash(Encoding.UTF8.GetBytes(message));
+            return Convert.ToHexString(hash).ToLowerInvariant();
         }
 
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)

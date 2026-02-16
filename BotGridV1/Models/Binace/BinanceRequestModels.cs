@@ -67,6 +67,23 @@ namespace BotGridV1.Models.Binace
         public int? ConfigId { get; set; }
     }
 
+    /// <summary>Switch trading mode: Spot or MarginCross (like Start/Stop flow)</summary>
+    public class req_SwitchTradingMode
+    {
+        public int? ConfigId { get; set; }
+        /// <summary>"Spot" or "MarginCross"</summary>
+        public string Mode { get; set; } = "Spot";
+    }
+
+    public class res_SwitchTradingMode
+    {
+        public bool Success { get; set; }
+        public string? Message { get; set; }
+        /// <summary>Current mode: "Spot" or "MarginCross"</summary>
+        public string Mode { get; set; } = "Spot";
+        public int? ConfigId { get; set; }
+    }
+
     // Discord Logging Request Models
     public class req_DiscordLog
     {
