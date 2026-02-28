@@ -870,8 +870,44 @@ namespace BotGridV1.Controllers
         {
             try
             {
-                await context.Database.ExecuteSqlRawAsync(
-                    "ALTER TABLE db_setting ADD COLUMN UseMarginCross INTEGER DEFAULT 0");
+                await context.Database.EnsureCreatedAsync();
+
+                var connection = context.Database.GetDbConnection();
+                if (connection.State != System.Data.ConnectionState.Open)
+                    await connection.OpenAsync();
+
+                try
+                {
+                    // Check if column already exists to avoid SQLite "duplicate column" error + EF error log spam
+                    using var checkCmd = connection.CreateCommand();
+                    checkCmd.CommandText = "PRAGMA table_info('db_setting');";
+
+                    var exists = false;
+                    using (var reader = await checkCmd.ExecuteReaderAsync())
+                    {
+                        while (await reader.ReadAsync())
+                        {
+                            // PRAGMA table_info columns: cid, name, type, notnull, dflt_value, pk
+                            var name = reader["name"]?.ToString();
+                            if (string.Equals(name, "UseMarginCross", StringComparison.OrdinalIgnoreCase))
+                            {
+                                exists = true;
+                                break;
+                            }
+                        }
+                    }
+
+                    if (!exists)
+                    {
+                        await context.Database.ExecuteSqlRawAsync(
+                            "ALTER TABLE db_setting ADD COLUMN UseMarginCross INTEGER DEFAULT 0");
+                    }
+                }
+                finally
+                {
+                    if (connection.State == System.Data.ConnectionState.Open)
+                        await connection.CloseAsync();
+                }
             }
             catch
             {

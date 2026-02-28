@@ -36,9 +36,11 @@ namespace BotGridV1.Services
         private DateTime? _waitBuyTime = null; // เวลาที่เริ่มรอซื้อ (เมื่อไม่มี openSellOrders)
         private DbSetting? _currentConfig;
         private bool _pauseBuyDueToInsufficientBalance = false; // Skip buy until a sell succeeds
+        private bool _hasLoggedMarginLevelPause = false; // Log "Buy paused: Margin level" only once per pause
         private decimal? _currentBuyThreshold = null; // Current buy threshold calculated in ProcessPriceUpdateAsync
         private decimal? _isSold_Price = null;
         private bool test = false; // true  false
+        private decimal? _MaxMaginLeavel_To_Stop = 1.5m;
 
         public bool IsBuyPausedDueToInsufficientBalance
         {
@@ -76,6 +78,7 @@ namespace BotGridV1.Services
             lock (_lockObject)
             {
                 _pauseBuyDueToInsufficientBalance = false;
+                _hasLoggedMarginLevelPause = false;
             }
             _logger.LogInformation("Buy pause due to insufficient balance has been manually reset.");
         }
@@ -97,6 +100,7 @@ namespace BotGridV1.Services
             lock (_lockObject)
             {
                 _pauseBuyDueToInsufficientBalance = pause;
+                if (!pause) _hasLoggedMarginLevelPause = false;
             }
 
             if (pause)
@@ -519,6 +523,41 @@ namespace BotGridV1.Services
                 {
                     _logger.LogDebug("Buy logic skipped because bot is paused due to insufficient balance. Waiting for sell before resuming.");
                     shouldCheckBuy = false;
+                }
+
+                // Before buy: require Margin Level >= _MaxMaginLeavel_To_Stop (e.g. 2.5); else pause buy
+                if (shouldCheckBuy && config.UseMarginCross)
+                {
+                    try
+                    {
+                        var restClient = CreateBinanceClient(config);
+                        var marginAccountResult = await restClient.SpotApi.Account.GetMarginAccountInfoAsync();
+                        decimal? ml = marginAccountResult.Success ? marginAccountResult.Data.MarginLevel : null;
+                        decimal threshold = _MaxMaginLeavel_To_Stop ?? 2.5m;
+                        if (!ml.HasValue || ml.Value < threshold)
+                        {
+                            lock (_lockObject)
+                            {
+                                var shouldLog = !_hasLoggedMarginLevelPause;
+                                _pauseBuyDueToInsufficientBalance = true;
+                                _hasLoggedMarginLevelPause = true;
+                                if (shouldLog)
+                                {
+                                    _logger.LogWarning(
+                                        "Buy paused: Margin level {ML} < {Threshold}. No buy until ML >= {Threshold} or manual resume.",
+                                        ml.HasValue ? ml.Value.ToString("F2") : "N/A",
+                                        threshold,
+                                        threshold);
+                                }
+                            }
+                            shouldCheckBuy = false;
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "Failed to get margin level; skipping buy this cycle.");
+                        shouldCheckBuy = false;
+                    }
                 }
 
                 if (shouldCheckBuy)
@@ -1190,7 +1229,11 @@ namespace BotGridV1.Services
 
                             if (_pauseBuyDueToInsufficientBalance)
                             {
-                                _pauseBuyDueToInsufficientBalance = false;
+                                lock (_lockObject)
+                                {
+                                    _pauseBuyDueToInsufficientBalance = false;
+                                    _hasLoggedMarginLevelPause = false;
+                                }
                                 _logger.LogInformation("Buy logic resumed: A sell completed after insufficient balance pause.");
                             }
 
@@ -1539,7 +1582,11 @@ namespace BotGridV1.Services
 
                     if (_pauseBuyDueToInsufficientBalance)
                     {
-                        _pauseBuyDueToInsufficientBalance = false;
+                        lock (_lockObject)
+                        {
+                            _pauseBuyDueToInsufficientBalance = false;
+                            _hasLoggedMarginLevelPause = false;
+                        }
                     }
 
                     if (_discordService != null)

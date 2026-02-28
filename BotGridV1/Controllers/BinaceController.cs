@@ -1247,6 +1247,79 @@ namespace BotGridV1.Controllers
             }
         }
 
+        /// <summary>
+        /// Get margin level only. Optional: TotalDebt and TotalBalance when provided by Binance.
+        /// </summary>
+        [HttpPost]
+        public async Task<ActionResult<res_Get_ML>> Get_ML(req_Get_ML? req = null)
+        {
+            try
+            {
+                await _context.Database.EnsureCreatedAsync();
+
+                var config = await GetConfigAsync(req?.ConfigId);
+                if (config == null)
+                {
+                    return BadRequest(new res_Get_ML
+                    {
+                        Success = false,
+                        Message = "Configuration not found. Please provide valid ConfigId or ensure database has settings."
+                    });
+                }
+
+                var client = CreateBinanceClient(config);
+                var marginAccountResult = await client.SpotApi.Account.GetMarginAccountInfoAsync();
+
+                if (!marginAccountResult.Success)
+                {
+                    return StatusCode(500, new res_Get_ML
+                    {
+                        Success = false,
+                        Message = marginAccountResult.Error?.Message ?? "Failed to get margin account info."
+                    });
+                }
+
+                var marginAccount = marginAccountResult.Data;
+                var response = new res_Get_ML
+                {
+                    Success = true,
+                    ML = marginAccount.MarginLevel
+                };
+
+                // Convert total debt and total balance from BTC to USD when Binance provides them
+                decimal btcUsd = 0;
+                var btcPriceResult = await client.SpotApi.ExchangeData.GetPriceAsync("BTCUSDT");
+                if (btcPriceResult.Success && btcPriceResult.Data.Price > 0)
+                {
+                    btcUsd = btcPriceResult.Data.Price;
+                }
+
+                if (btcUsd > 0)
+                {
+                    if (marginAccount.TotalLiabilityOfBtc != 0)
+                    {
+                        response.TotalDebt = marginAccount.TotalLiabilityOfBtc * btcUsd;
+                    }
+                    if (marginAccount.TotalAssetOfBtc != 0)
+                    {
+                        response.TotalBalance = marginAccount.TotalAssetOfBtc * btcUsd;
+                    }
+                }
+
+                return Ok(response);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error getting margin level");
+                return StatusCode(500, new res_Get_ML
+                {
+                    Success = false,
+                    Message = ex.Message
+                });
+            }
+        }
+      
+       
         #region Helper Methods
 
         private async Task<DbSetting?> GetConfigAsync(int? configId)

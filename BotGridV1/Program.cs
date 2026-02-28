@@ -2,6 +2,7 @@ using BotGridV1.Models.Login;
 using BotGridV1.Models.SQLite;
 using BotGridV1.Services;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Microsoft.IdentityModel.Tokens;
@@ -9,6 +10,11 @@ using System.Text;
 using System.Text.Json.Serialization;
 
 var builder = WebApplication.CreateBuilder(args);
+
+// Configure Data Protection so keys are not persisted unencrypted (removes "No XML encryptor configured" warning)
+var dataProtection = builder.Services.AddDataProtection().SetApplicationName("BotGridV1");
+if (OperatingSystem.IsWindows())
+    dataProtection.ProtectKeysWithDpapi();
 
 // Add services to the container.
 builder.Services.AddCors(options =>
@@ -26,7 +32,8 @@ builder.Services.AddCors(options =>
             "https://report.cayoshibot.com",
             "http://localhost:2000",
             "http://127.0.0.1:5500",
-            "https://reportmagin.cayoshibot.com"
+            "https://reportmagin.cayoshibot.com",
+            "https://nateeron.github.io"
         )
         .AllowAnyHeader()
         .AllowAnyMethod()

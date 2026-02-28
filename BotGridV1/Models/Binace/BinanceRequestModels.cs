@@ -270,6 +270,28 @@ namespace BotGridV1.Models.Binace
         public int? ConfigId { get; set; }
     }
 
+    /// <summary>
+    /// Request for Get_ML - margin level only. Body can be empty {}.
+    /// </summary>
+    public class req_Get_ML
+    {
+        public int? ConfigId { get; set; }
+    }
+
+    /// <summary>
+    /// Response for Get_ML. ML = margin level. TotalDebt/TotalBalance included when provided by Binance.
+    /// </summary>
+    public class res_Get_ML
+    {
+        public bool Success { get; set; }
+        public decimal? ML { get; set; }
+        public string? Message { get; set; }
+        /// <summary>Total liability (debt) in USD - from Binance when available.</summary>
+        public decimal? TotalDebt { get; set; }
+        /// <summary>Total asset value balance in USD - from Binance when available.</summary>
+        public decimal? TotalBalance { get; set; }
+    }
+
     public class res_MarginBalance
     {
         public string Asset { get; set; } = string.Empty;
