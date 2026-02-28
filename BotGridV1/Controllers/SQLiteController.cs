@@ -1,4 +1,4 @@
-﻿using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using BotGridV1.Models.SQLite;
@@ -491,6 +491,52 @@ namespace BotGridV1.Controllers
             {
                 _logger.LogError(ex, "Error getting orders by status");
                 return StatusCode(500, new { success = false, message = ex.Message });
+            }
+        }
+
+        /// <summary>
+        /// Insert a new order into db_Order
+        /// </summary>
+        [HttpPost]
+        public async Task<IActionResult> InsertOrder(InsertOrderRequest req)
+        {
+            try
+            {
+                await _context.Database.EnsureCreatedAsync();
+
+                if (string.IsNullOrWhiteSpace(req.Status))
+                {
+                    return BadRequest(new InsertOrderResponse { Success = false, Message = "Status is required" });
+                }
+
+                var entity = new DbOrder
+                {
+                    Timestamp = req.Timestamp,
+                    OrderBuyID = req.OrderBuyID,
+                    PriceBuy = req.PriceBuy,
+                    PriceWaitSell = req.PriceWaitSell,
+                    OrderSellID = req.OrderSellID,
+                    PriceSellActual = req.PriceSellActual,
+                    ProfitLoss = req.ProfitLoss,
+                    DateBuy = req.DateBuy,
+                    DateSell = req.DateSell,
+                    Setting_ID = req.Setting_ID,
+                    Status = req.Status,
+                    Symbol = req.Symbol,
+                    Quantity = req.Quantity,
+                    BuyAmountUSD = req.BuyAmountUSD,
+                    CoinQuantity = req.CoinQuantity
+                };
+
+                _context.DbOrders.Add(entity);
+                await _context.SaveChangesAsync();
+
+                return Ok(new InsertOrderResponse { Success = true, Id = entity.Id });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error inserting order");
+                return StatusCode(500, new InsertOrderResponse { Success = false, Message = ex.Message });
             }
         }
 
