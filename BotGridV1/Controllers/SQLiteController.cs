@@ -1384,17 +1384,17 @@ namespace BotGridV1.Controllers
 
                         case "HalfDay":
                             periodSelect = @"
-                            date(DateSell) || ' ' ||
+                            date(DateSell, '+7 hours') || ' ' ||
                             CASE WHEN CAST(strftime('%H', DateSell) AS INT) < 12
                                  THEN '00-12' ELSE '12-24' END";
                             groupBy = @"
-                            date(DateSell),
+                            date(DateSell, '+7 hours'),
                             CASE WHEN CAST(strftime('%H', DateSell) AS INT) < 12 THEN 0 ELSE 1 END";
                             break;
 
                         case "Day":
-                            periodSelect = "date(DateSell)";
-                            groupBy = "date(DateSell)";
+                            periodSelect = "date(DateSell, '+7 hours')";
+                            groupBy = "date(DateSell, '+7 hours')";
                             break;
 
                         case "Week":
