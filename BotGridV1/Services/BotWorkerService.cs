@@ -1135,7 +1135,8 @@ namespace BotGridV1.Services
                     long sellOrderId;
                     bool sellSuccess;
                     string? sellError = null;
-
+                    // Open Order Sell 
+                    // คำสั่งขาย
                     if (config.UseMarginCross && _httpClientFactory != null)
                     {
                         // Margin Cross sell with AUTO_REPAY (ขายพร้อมชำระหนี้)
@@ -1711,6 +1712,10 @@ namespace BotGridV1.Services
             {
                 using var doc = JsonDocument.Parse(body);
                 var root = doc.RootElement;
+                var responseKeys = string.Join(", ", root.EnumerateObject().Select(p => p.Name));
+                // ดึงข้อมูลชื่อพารามิเตอร์จาก JSON ตอบกลับเพื่อการดีบัก
+                _logger.LogInformation("Margin order response JSON parameter names: {ResponseKeys}", responseKeys);
+
                 var orderId = root.TryGetProperty("orderId", out var o) ? o.GetInt64() : 0;
                 var executedQty = root.TryGetProperty("executedQty", out var eq) ? ParseDecimal(eq) : 0;
                 var origQty = root.TryGetProperty("origQty", out var oq) ? ParseDecimal(oq) : (root.TryGetProperty("origQuoteOrderQty", out var oqq) ? ParseDecimal(oqq) : 0);
