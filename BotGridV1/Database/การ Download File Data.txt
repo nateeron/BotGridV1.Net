@@ -1,0 +1,27 @@
+
+
+ที่ เก็บใน Data Base :/var/opt/botgrid.db
+
+scp root@139.180.128.104:/var/opt/botgrid.db "H:\Developer\Python\CCharp\BotGridV1\BotGridV1\Database\botgrid.db"
+Password: +x4Vf$w.r-WPbUQq
+
+
+ถ้าต้องการ Upload ไฟล์กลับไปที่เดิม (/var/www/botgrid/) หลังจากแก้ไขหรือดาวน์โหลดมาแล้ว มีหลายวิธี:
+scp "H:\Developer\Python\CCharp\BotGridV1\BotGridV1\Database\botgrid.db" root@139.180.128.104:/var/opt/botgrid.db
+
+Password: +x4Vf$w.r-WPbUQq
+
+
+sudo systemctl restart botgrid
+sudo systemctl status botgrid
+
+sudo journalctl -u botgrid -n 50 --no-pager
+
+
+
+
+
+เจอปัญหา Magin ML ไม่ Load เพราะ Data ขายเยอะเกินไป ต้อง Clear Data 
+SELECT * FROM db_Order
+DELETE FROM db_Order
+WHERE Status = 'SOLD';
