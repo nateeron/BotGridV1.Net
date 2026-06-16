@@ -1451,8 +1451,8 @@ namespace BotGridV1.Controllers
                     }
 
                     sql += $@"
-                    GROUP BY {groupBy}
-                    ORDER BY Period";
+                    GROUP BY {groupBy} 
+                    ORDER BY Period DESC" ;
 
                     // Add LIMIT if PeriodCount is specified
                     if (req.PeriodCount.HasValue && req.PeriodCount.Value > 0)
